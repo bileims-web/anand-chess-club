@@ -395,9 +395,6 @@
   <h1>Anand Chess Club</h1>
   <p class="sub">Beat a member to meet the next one.</p>
   <div id="rows"></div>
-  <button class="row hidden" id="resumeBtn">
-    <span class="nm">Resume game</span><span class="rt" id="resumeOpp"></span>
-  </button>
   <button class="row" id="historyBtn">
     <span class="nm">Past Games</span><span class="rt" id="historyCount"></span>
   </button>
@@ -648,7 +645,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.18';
+var BUILD = '2026-08-29.19';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -822,8 +819,6 @@ function loadState() {
 
 // ---------- Ladder ----------
 function renderLadder() {
-  $('resumeBtn').classList.toggle('hidden', !pendingGame);
-  $('resumeOpp').textContent = pendingGame ? 'vs ' + pendingGame.oppName : '';
   $('historyCount').textContent = gameHistory.length
     ? gameHistory.length + (gameHistory.length === 1 ? ' game' : ' games') : '';
   var box = $('rows');
@@ -2914,7 +2909,6 @@ $('gearGame').onclick = openSettings;
 $('sheetClose').onclick = closeSettings;
 $('sheetBg').onclick = closeSettings;
 $('forgetKeyBtn').onclick = forgetApiKey;
-$('resumeBtn').onclick = resumeGame;
 $('startWhite').onclick = function () { startChosen('w'); };
 $('startBlack').onclick = function () { startChosen('b'); };
 $('startResume').onclick = function () { closeStartDialog(); resumeGame(); };
