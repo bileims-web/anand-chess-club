@@ -221,9 +221,9 @@ var LEVELS = [
   { name: 'Sana',   rating: 1200 },
   { name: 'Vikram', rating: 1300 },
   { name: 'Nisha',  rating: 1400 },
-  { name: 'Anand',  rating: 1500 }
+  { name: 'Ishaan', rating: 1500 }
 ];
-var MEAN_GIRL = { name: 'Mean Girl', rating: 2400, offLadder: true };
+var MEAN_GIRL = { name: 'Anand', rating: 2400, offLadder: true };
 var THEMES = ['slate', 'dusk', 'night', 'sage'];
 var GLYPH = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
 var VAL = { p: 1, n: 3, b: 3, r: 5, q: 9 };
@@ -588,7 +588,7 @@ function endGame() {
     if (playerWon) {
       msg = 'You beat ' + opp.name + ' (' + opp.rating + ')!';
       if (opp.offLadder) {
-        msg += ' She’s not on the ladder — bragging rights only.';
+        msg += ' Anand’s not on the ladder — bragging rights only.';
       } else if (oppIndex === progress) {
         progress++;
         msg += progress < LEVELS.length
