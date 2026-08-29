@@ -227,6 +227,12 @@
     color: color-mix(in srgb, var(--pw) 45%, transparent);
   }
   .tiertoggle button.on { border-color: var(--brass); color: var(--brass); }
+  .rvarrowwrap { position: absolute; inset: 0; pointer-events: none; }
+  .rvarrows { width: 100%; height: 100%; display: block; overflow: visible; }
+  .rvarrows line { stroke: currentColor; }
+  .arr-played { color: #D9534F; opacity: .85; }
+  .arr-best { color: #55B85F; opacity: .9; }
+  #rvGraph { cursor: pointer; }
   .rvplay { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 6px 0 8px; }
   .rvplay button {
     font-size: 15px; padding: 4px 12px; border-radius: 8px; line-height: 1.4;
@@ -327,7 +333,7 @@
   </div>
   <div id="rvBody">
     <div id="rvProgWrap" class="hidden">
-      <div class="rvbar"><div id="rvBarFill"></div></div>
+      <div class="rvbar" id="rvBar"><div id="rvBarFill"></div></div>
       <div id="rvProgTxt"></div>
     </div>
     <div class="rvcounts" id="rvCounts"></div>
@@ -427,7 +433,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.4';
+var BUILD = '2026-08-29.5';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -1360,6 +1366,8 @@ var RV_LABELS = {
   good:       { sym: '',   txt: 'Good',          cls: '',            flag: false }
 };
 var RV_BOOK_PLIES = 10;   // moves this early count as "in book" for the Great rule
+var RV_DEPTH = 12;        // deep enough to be right about what a 1000 can use
+var RV_SKIP_PLIES = 6;    // opening theory: nothing to learn, so don't spend on it
 
 var gameHistory = [];     // finished games, newest first (window.history is taken)
 var reviews = {};         // gameKey -> review object (session cache)
@@ -1422,7 +1430,9 @@ function buildMoveTable(rv) {
   rv.moves = [];
   rv.counts = {};
   var n = rv.fens.length - 1;
-  for (var k = rv.color === 'w' ? 0 : 1; k < n; k += 2) {
+  var first = rv.color === 'w' ? 0 : 1;
+  while (first < RV_SKIP_PLIES) first += 2;
+  for (var k = first; k < n; k += 2) {
     var ev = rv.evals[k];
     if (!ev || !ev.pvs[0]) continue;
     var m = {
@@ -1439,6 +1449,7 @@ function buildMoveTable(rv) {
         : 100,
       oppGain: k >= 1 ? Math.max(0, rv.win[k] - rv.win[k - 1]) : 0,
       oppSan: k >= 1 ? rv.sans[k - 1] : null,
+      bestUci: ev.bestmove,
       bestSan: sanOf(rv.fens[k], ev.bestmove),
       bestLine: sanLine(rv.fens[k], ev.pvs[0].line.split(' '), 6),
       color: rv.color,
@@ -1482,12 +1493,17 @@ function reviewPayload(m) {
 function runReview(rv) {
   rv.status = 'analysing';
   var n = rv.fens.length - 1;
+  var from = Math.min(RV_SKIP_PLIES, n);
+  // The skipped opening is book: treat it as level so the graph starts
+  // at the first move actually worth judging.
+  for (var b = 0; b < from; b++) rv.win[b] = 50;
+  rv.total = Math.max(1, n - from);
   var chain = SF.init().catch(stageErr('Stockfish didn’t load'));
   var i;
-  for (i = 0; i < n; i++) {
+  for (i = from; i < n; i++) {
     (function (idx) {
       chain = chain.then(rvWaitIfPlaying).then(function () {
-        return SF.analyse(rv.fens[idx], { depth: 18, multipv: studentTurn(rv, idx) ? 3 : 1 })
+        return SF.analyse(rv.fens[idx], { depth: RV_DEPTH, multipv: studentTurn(rv, idx) ? 3 : 1 })
           .catch(stageErr('Stockfish analysis failed at move ' + (Math.floor(idx / 2) + 1)));
       }).then(function (r) {
         rv.evals[idx] = r;
@@ -1503,6 +1519,8 @@ function runReview(rv) {
     rv.win[n] = rv.result === 'win' ? 100 : (rv.result === 'loss' ? 0 : 50);
     buildMoveTable(rv);
     persistReview(rv);
+    // The board, list and graph are usable now. The explanations arrive
+    // afterwards in the background and fill themselves in.
     rv.status = 'explaining';
     rv.exBusy = true;
     renderReviewIfVisible();
@@ -1534,7 +1552,7 @@ function persistReview(rv) {
     return {
       ply: m.ply, san: m.san, uci: m.uci, label: m.label, flagged: m.flagged,
       before: m.before, after: m.after, loss: m.loss,
-      bestSan: m.bestSan, bestLine: m.bestLine, oppSan: m.oppSan, oppGain: m.oppGain,
+      bestUci: m.bestUci, bestSan: m.bestSan, bestLine: m.bestLine, oppSan: m.oppSan, oppGain: m.oppGain,
       explanations: m.explanations, exErrors: m.exErrors
     };
   });
@@ -1569,6 +1587,7 @@ function runExplanations(rv) {
   });
   rv.exTotal = flagged.length;
   rv.exDone = 0;
+  renderReviewIfVisible();   // say straight away that writing has begun
   if (!flagged.length) return Promise.resolve();
   return getCoachKey().then(function (key) {
     var chain = Promise.resolve();
@@ -1700,7 +1719,14 @@ function togglePlayback() {
     if (!curReview || rvPly >= curReview.fens.length - 1) { stopPlayback(); return; }
     rvPly++;
     renderReview();
-  }, 900);
+    // stop where there is something to read
+    for (var i = 0; i < curReview.moves.length; i++) {
+      if (curReview.moves[i].ply === rvPly - 1 && curReview.moves[i].flagged) {
+        stopPlayback();
+        break;
+      }
+    }
+  }, 1000);
 }
 
 function stepPly(delta) {
@@ -1730,15 +1756,20 @@ function renderReview() {
   var rv = curReview;
   if (!rv) return;
   var pw = $('rvProgWrap');
+  var totalMoves = Math.ceil((rv.fens.length - 1) / 2);
   if (rv.status === 'analysing' || rv.status === 'pending') {
     pw.classList.remove('hidden');
+    $('rvBar').classList.remove('hidden');
     $('rvBarFill').style.width = Math.round(rv.done / rv.total * 100) + '%';
-    $('rvProgTxt').textContent = 'Analysing position ' + rv.done + ' of ' + rv.total + '…';
-  } else if (rv.status === 'explaining') {
+    var atMove = Math.min(totalMoves, Math.ceil((Math.min(RV_SKIP_PLIES, rv.fens.length - 1) + rv.done) / 2));
+    $('rvProgTxt').textContent = 'Analysing move ' + atMove + ' of ' + totalMoves + '…';
+  } else if (rv.status === 'explaining' && rv.exDone < rv.exTotal) {
+    // analysis is done and on screen; this line is just a quiet note
     pw.classList.remove('hidden');
-    $('rvBarFill').style.width = (rv.exTotal ? Math.round(rv.exDone / rv.exTotal * 100) : 100) + '%';
-    $('rvProgTxt').textContent = 'Writing explanations ' + rv.exDone + ' of ' + rv.exTotal + '…';
+    $('rvBar').classList.add('hidden');
+    $('rvProgTxt').textContent = 'GM Anand is writing ' + (rv.exDone + 1) + ' of ' + rv.exTotal + '…';
   } else if (rv.status === 'error') {
+    $('rvBar').classList.remove('hidden');
     pw.classList.remove('hidden');
     $('rvBarFill').style.width = '0%';
     $('rvProgTxt').textContent = rv.error;
@@ -1829,7 +1860,32 @@ function renderRvMoves(rv) {
   }
 }
 
-function renderRvMini(fen, uci, flip) {
+// arrows: [{uci, cls}] — drawn over the board, played move and better move
+function rvArrowSvg(arrows, flip) {
+  var mid = function (sq) {
+    var f = FILES.indexOf(sq.charAt(0));
+    var r = 8 - parseInt(sq.charAt(1), 10);
+    if (flip) { f = 7 - f; r = 7 - r; }
+    return { x: f * 12.5 + 6.25, y: r * 12.5 + 6.25 };
+  };
+  var body = '';
+  arrows.forEach(function (a, i) {
+    if (!a || !a.uci || a.uci.length < 4) return;
+    var from = mid(a.uci.slice(0, 2));
+    var to = mid(a.uci.slice(2, 4));
+    body += '<line x1="' + from.x + '" y1="' + from.y + '" x2="' + to.x + '" y2="' + to.y +
+      '" class="' + a.cls + '" stroke-width="1.9" stroke-linecap="round" ' +
+      'marker-end="url(#rvhead' + i + ')"></line>';
+  });
+  var defs = arrows.map(function (a, i) {
+    return '<marker id="rvhead' + i + '" markerWidth="4" markerHeight="4" refX="2.6" refY="2" orient="auto">' +
+      '<path d="M0,0 L4,2 L0,4 z" class="' + (a && a.cls ? a.cls : '') + '" fill="currentColor"></path></marker>';
+  }).join('');
+  return '<svg class="rvarrows" viewBox="0 0 100 100" preserveAspectRatio="none">' +
+    '<defs>' + defs + '</defs>' + body + '</svg>';
+}
+
+function renderRvMini(fen, uci, flip, arrows) {
   var box = $('rvMini');
   box.innerHTML = '';
   var hl = uci ? [uci.slice(0, 2), uci.slice(2, 4)] : [];
@@ -1860,6 +1916,12 @@ function renderRvMini(fen, uci, flip) {
       box.insertBefore(sq, box.firstChild);   // squares under pieces
     }
   }
+  if (arrows && arrows.length) {
+    var layer = document.createElement('div');
+    layer.className = 'rvarrowwrap';
+    layer.innerHTML = rvArrowSvg(arrows, flip);
+    box.appendChild(layer);
+  }
 }
 
 function renderRvDetail(rv) {
@@ -1869,7 +1931,17 @@ function renderRvDetail(rv) {
 
   // the move that produced the position on screen
   var lastUci = rvPly > 0 ? rv.ucis[rvPly - 1] : null;
-  renderRvMini(rv.fens[rvPly], lastUci, rv.color === 'b');
+  var shown = null;
+  for (var q = 0; q < rv.moves.length; q++) {
+    if (rv.moves[q].ply === rvPly - 1) { shown = rv.moves[q]; break; }
+  }
+  // your move, and the move that was better
+  var arrows = [];
+  if (lastUci) arrows.push({ uci: lastUci, cls: 'arr-played' });
+  if (shown && shown.flagged && shown.bestUci && shown.bestUci !== lastUci) {
+    arrows.push({ uci: shown.bestUci, cls: 'arr-best' });
+  }
+  renderRvMini(rv.fens[rvPly], lastUci, rv.color === 'b', arrows);
 
   $('rvPlyTxt').textContent = rvPly === 0
     ? 'start'
@@ -1879,10 +1951,7 @@ function renderRvDetail(rv) {
   $('rvNext').disabled = rvPly >= n;
 
   // commentary belongs to the move just played, when it was one of yours
-  var m = null;
-  for (var j = 0; j < rv.moves.length; j++) {
-    if (rv.moves[j].ply === rvPly - 1) { m = rv.moves[j]; break; }
-  }
+  var m = shown;
   if (!m) { $('rvExplain').textContent = ''; return; }
 
   var head = 'You played ' + m.san +
@@ -2394,6 +2463,16 @@ $('rvStart').onclick = function () { stopPlayback(); rvPly = 0; renderReview(); 
 $('rvPrev').onclick = function () { stepPly(-1); };
 $('rvNext').onclick = function () { stepPly(1); };
 $('rvPlay').onclick = togglePlayback;
+$('rvGraph').addEventListener('click', function (e) {
+  if (!curReview) return;
+  var n = curReview.fens.length - 1;
+  var rect = $('rvGraph').getBoundingClientRect();
+  if (!rect.width) return;
+  var frac = (e.clientX - rect.left) / rect.width;
+  stopPlayback();
+  rvPly = Math.max(0, Math.min(n, Math.round(frac * n)));
+  renderReview();
+});
 $('rvMoves').addEventListener('click', function (e) {
   var t = e.target.closest ? e.target.closest('[data-ply]') : null;
   if (!t) return;
