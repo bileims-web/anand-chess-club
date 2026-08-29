@@ -674,7 +674,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.34';
+var BUILD = '2026-08-29.35';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -787,6 +787,13 @@ function setReviewTier(t) {
   reviewTier = t;
   renderTiers();
   saveState();
+  // Picking a tier is also the retry gesture: a tier that failed before
+  // (key prompt cancelled, no internet) gets a fresh attempt.
+  if (curReview) {
+    curReview.moves.forEach(function (m) {
+      if (m.exErrors && m.exErrors[t]) delete m.exErrors[t];
+    });
+  }
   renderReviewIfVisible();   // cached tiers switch instantly
   ensureExplanations();      // fetch whatever this tier is missing
 }
@@ -2042,8 +2049,10 @@ function runReview(rv) {
     rv.exBusy = false;
     rv.status = 'done';
     renderReviewIfVisible();
+    if (rv.exAgain) { rv.exAgain = false; ensureExplanations(); }
   }).catch(function (e) {
     rv.exBusy = false;
+    rv.exAgain = false;
     rv.status = 'error';
     rv.error = e.message;
     renderReviewIfVisible();
@@ -2078,7 +2087,11 @@ function persistReview(rv) {
 // whatever the selected tier is still missing.
 function ensureExplanations() {
   var rv = curReview;
-  if (!rv || rv.exBusy || rv.status !== 'done') return;
+  if (!rv) return;
+  // Mid-write? Note the request instead of dropping it — the tier picked
+  // during a batch used to be silently ignored.
+  if (rv.exBusy) { rv.exAgain = true; return; }
+  if (rv.status !== 'done') return;
   var missing = rv.moves.some(function (m) {
     return m.flagged && !m.explanations[reviewTier] && !m.exErrors[reviewTier];
   });
@@ -2090,6 +2103,7 @@ function ensureExplanations() {
     rv.exBusy = false;
     rv.status = 'done';
     renderReviewIfVisible();
+    if (rv.exAgain) { rv.exAgain = false; ensureExplanations(); }
   });
 }
 
