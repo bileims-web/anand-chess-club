@@ -79,9 +79,16 @@ function waitReady(w, timeoutMs) {
 
 function doInit() {
   if (initInFlight) return initInFlight;
-  var canThread = typeof SharedArrayBuffer !== 'undefined' && self.crossOriginIsolated === true;
+  // Phones wedge spawning a pthread pool from inside a worker (Android
+  // Chrome and iPhone both, same as the net engines) — go straight to the
+  // single build there. Elsewhere the threaded attempt gets 12s: a healthy
+  // load handshakes in one or two, and the page only waits 60 in total.
+  var MOBILE = /Android|iPhone|iPad|iPod|Mobile/i.test(
+    (self.navigator && navigator.userAgent) || '');
+  var canThread = !MOBILE &&
+    typeof SharedArrayBuffer !== 'undefined' && self.crossOriginIsolated === true;
   var attempt = canThread
-    ? handshake(MULTI_BUILD, 60000).then(function (w) {
+    ? handshake(MULTI_BUILD, 12000).then(function (w) {
         engineName = MULTI_BUILD;
         var hc = (self.navigator && navigator.hardwareConcurrency) || 2;
         threads = Math.max(1, Math.min(hc - 1, 8));
