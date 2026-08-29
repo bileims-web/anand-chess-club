@@ -229,9 +229,6 @@
   .tiertoggle button.on { border-color: var(--brass); color: var(--brass); }
   .rvarrowwrap { position: absolute; inset: 0; pointer-events: none; }
   .rvarrows { width: 100%; height: 100%; display: block; overflow: visible; }
-  .rvarrows line { stroke: currentColor; }
-  .arr-played { color: #D9534F; opacity: .85; }
-  .arr-best { color: #55B85F; opacity: .9; }
   #rvGraph { cursor: pointer; }
   .rvplay { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 6px 0 8px; }
   .rvplay button {
@@ -343,8 +340,7 @@
       <div class="rvplay">
         <button id="rvStart" aria-label="First move">&#124;&#9664;</button>
         <button id="rvPrev" aria-label="Previous move">&#9664;</button>
-        <button id="rvPlay" aria-label="Play">&#9654;</button>
-        <button id="rvNext" aria-label="Next move">&#9654;&#124;</button>
+        <button id="rvNext" aria-label="Next move">&#9654;</button>
         <span id="rvPlyTxt"></span>
       </div>
       <div class="rvtoggle">
@@ -433,7 +429,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.5';
+var BUILD = '2026-08-29.6';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -1688,7 +1684,6 @@ function openStoredGame(rec) {
   }
   curReview = rv;
   rvPly = rv.fens.length - 1;
-  stopPlayback();
   $('ladder').classList.add('hidden');
   $('histScr').classList.add('hidden');
   $('gameScr').classList.add('hidden');
@@ -1700,38 +1695,11 @@ function openStoredGame(rec) {
   else ensureExplanations();
 }
 
-// ---------- Replay ----------
+// ---------- Replay: you drive it ----------
 var rvPly = 0;
-var rvPlayTimer = null;
-
-function stopPlayback() {
-  if (rvPlayTimer) { clearInterval(rvPlayTimer); rvPlayTimer = null; }
-  var b = $('rvPlay');
-  if (b) b.innerHTML = '&#9654;';
-}
-
-function togglePlayback() {
-  if (rvPlayTimer) { stopPlayback(); return; }
-  if (!curReview) return;
-  if (rvPly >= curReview.fens.length - 1) rvPly = 0;
-  $('rvPlay').innerHTML = '&#10073;&#10073;';
-  rvPlayTimer = setInterval(function () {
-    if (!curReview || rvPly >= curReview.fens.length - 1) { stopPlayback(); return; }
-    rvPly++;
-    renderReview();
-    // stop where there is something to read
-    for (var i = 0; i < curReview.moves.length; i++) {
-      if (curReview.moves[i].ply === rvPly - 1 && curReview.moves[i].flagged) {
-        stopPlayback();
-        break;
-      }
-    }
-  }, 1000);
-}
 
 function stepPly(delta) {
   if (!curReview) return;
-  stopPlayback();
   rvPly = Math.max(0, Math.min(curReview.fens.length - 1, rvPly + delta));
   renderReview();
 }
@@ -1743,7 +1711,6 @@ function startReview() {
 }
 
 function rvBackToLadder() {
-  stopPlayback();
   $('reviewScr').classList.add('hidden');
   toLadder();
 }
@@ -1868,19 +1835,25 @@ function rvArrowSvg(arrows, flip) {
     if (flip) { f = 7 - f; r = 7 - r; }
     return { x: f * 12.5 + 6.25, y: r * 12.5 + 6.25 };
   };
+  // colours are written straight onto the shapes: nothing here depends on
+  // inherited CSS resolving inside <marker>, which is where arrows vanish
   var body = '';
+  var defs = '';
   arrows.forEach(function (a, i) {
     if (!a || !a.uci || a.uci.length < 4) return;
     var from = mid(a.uci.slice(0, 2));
     var to = mid(a.uci.slice(2, 4));
-    body += '<line x1="' + from.x + '" y1="' + from.y + '" x2="' + to.x + '" y2="' + to.y +
-      '" class="' + a.cls + '" stroke-width="1.9" stroke-linecap="round" ' +
-      'marker-end="url(#rvhead' + i + ')"></line>';
+    // stop the line short so the head sits on the target square
+    var dx = to.x - from.x, dy = to.y - from.y;
+    var len = Math.sqrt(dx * dx + dy * dy) || 1;
+    var ex = to.x - (dx / len) * 3.2, ey = to.y - (dy / len) * 3.2;
+    defs += '<marker id="rvhead' + i + '" markerWidth="3.4" markerHeight="3.4" ' +
+      'refX="1.2" refY="1.7" orient="auto">' +
+      '<path d="M0,0 L3.4,1.7 L0,3.4 z" fill="' + a.color + '"></path></marker>';
+    body += '<line x1="' + from.x + '" y1="' + from.y + '" x2="' + ex + '" y2="' + ey +
+      '" stroke="' + a.color + '" stroke-width="2.6" stroke-linecap="round" ' +
+      'opacity="0.9" marker-end="url(#rvhead' + i + ')"></line>';
   });
-  var defs = arrows.map(function (a, i) {
-    return '<marker id="rvhead' + i + '" markerWidth="4" markerHeight="4" refX="2.6" refY="2" orient="auto">' +
-      '<path d="M0,0 L4,2 L0,4 z" class="' + (a && a.cls ? a.cls : '') + '" fill="currentColor"></path></marker>';
-  }).join('');
   return '<svg class="rvarrows" viewBox="0 0 100 100" preserveAspectRatio="none">' +
     '<defs>' + defs + '</defs>' + body + '</svg>';
 }
@@ -1937,9 +1910,9 @@ function renderRvDetail(rv) {
   }
   // your move, and the move that was better
   var arrows = [];
-  if (lastUci) arrows.push({ uci: lastUci, cls: 'arr-played' });
+  if (lastUci) arrows.push({ uci: lastUci, color: '#E0524D' });
   if (shown && shown.flagged && shown.bestUci && shown.bestUci !== lastUci) {
-    arrows.push({ uci: shown.bestUci, cls: 'arr-best' });
+    arrows.push({ uci: shown.bestUci, color: '#4BAF57' });
   }
   renderRvMini(rv.fens[rvPly], lastUci, rv.color === 'b', arrows);
 
@@ -2459,24 +2432,22 @@ $('reviewBtn').onclick = startReview;
 $('rvBack').onclick = rvBackToLadder;
 $('histBack').onclick = function () { $('histScr').classList.add('hidden'); toLadder(); };
 $('historyBtn').onclick = openHistory;
-$('rvStart').onclick = function () { stopPlayback(); rvPly = 0; renderReview(); };
+$('rvStart').onclick = function () { rvPly = 0; renderReview(); };
 $('rvPrev').onclick = function () { stepPly(-1); };
 $('rvNext').onclick = function () { stepPly(1); };
-$('rvPlay').onclick = togglePlayback;
+$('rvMini').addEventListener('click', function () { stepPly(1); });
 $('rvGraph').addEventListener('click', function (e) {
   if (!curReview) return;
   var n = curReview.fens.length - 1;
   var rect = $('rvGraph').getBoundingClientRect();
   if (!rect.width) return;
   var frac = (e.clientX - rect.left) / rect.width;
-  stopPlayback();
   rvPly = Math.max(0, Math.min(n, Math.round(frac * n)));
   renderReview();
 });
 $('rvMoves').addEventListener('click', function (e) {
   var t = e.target.closest ? e.target.closest('[data-ply]') : null;
   if (!t) return;
-  stopPlayback();
   rvPly = parseInt(t.getAttribute('data-ply'), 10) + 1;
   renderReview();
 });
