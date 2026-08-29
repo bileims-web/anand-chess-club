@@ -255,6 +255,7 @@
     <div class="tierrow"><span class="tierlab">Review</span><span id="reviewTierChips"></span></div>
   </div>
   <p class="spend" id="ladderSpend"></p>
+  <p class="spend" id="buildTag"></p>
 </section>
 
 <section id="gameScr" class="hidden">
@@ -361,7 +362,23 @@ var resignOffered = false; // he only asks once per game
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
+var BUILD = '2026-08-29.1';
 var $ = function (id) { return document.getElementById(id); };
+
+// GitHub Pages lets browsers cache this page for 10 minutes, which makes
+// "is the fix live on my phone?" unanswerable. So the page checks its own
+// build id against the server and reloads itself once if it is stale.
+function checkFresh() {
+  fetch(location.pathname, { cache: 'no-store' }).then(function (r) {
+    if (!r.ok) return '';
+    return r.text();
+  }).then(function (txt) {
+    var m = ('' + txt).match(/var BUILD = '([^']+)'/);
+    if (m && m[1] !== BUILD && location.search.indexOf(m[1]) === -1) {
+      location.replace(location.pathname + '?v=' + encodeURIComponent(m[1]));
+    }
+  }).catch(function () {});
+}
 var FILES = 'abcdefgh';
 
 function buzz() { if (navigator.vibrate) navigator.vibrate(10); }
@@ -887,17 +904,52 @@ function pieceOwnership(fen) {
 }
 
 // -- device-local key + cache storage (same IndexedDB the models use) --
+// One cached connection, and the open is retried with a timeout: Safari has
+// a known bug where a main-page indexedDB.open can silently never fire its
+// callbacks, which would lose progress and positions while the workers'
+// model cache (a separate context) keeps working.
+var idbConn = null;
+
 function idbOpen() {
+  if (idbConn) return Promise.resolve(idbConn);
   return new Promise(function (resolve, reject) {
-    var req = indexedDB.open('MaiaModels', 1);
-    req.onerror = function () { reject(req.error); };
-    req.onsuccess = function () { resolve(req.result); };
-    req.onupgradeneeded = function (e) {
-      var db = e.target.result;
-      if (!db.objectStoreNames.contains('models')) {
-        db.createObjectStore('models', { keyPath: 'id' });
-      }
-    };
+    var attempts = 0;
+    (function tryOpen() {
+      attempts++;
+      var settled = false;
+      var req = indexedDB.open('MaiaModels', 1);
+      var timer = setTimeout(function () {
+        if (settled) return;
+        settled = true;
+        if (attempts < 3) tryOpen();
+        else reject(new Error('storage did not respond'));
+      }, 1500);
+      req.onerror = function () {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (attempts < 3) setTimeout(tryOpen, 300);
+        else reject(req.error);
+      };
+      req.onsuccess = function () {
+        if (settled) { try { req.result.close(); } catch (ignore) {} return; }
+        settled = true;
+        clearTimeout(timer);
+        idbConn = req.result;
+        idbConn.onclose = function () { idbConn = null; };
+        idbConn.onversionchange = function () {
+          try { idbConn.close(); } catch (ignore) {}
+          idbConn = null;
+        };
+        resolve(idbConn);
+      };
+      req.onupgradeneeded = function (e) {
+        var db = e.target.result;
+        if (!db.objectStoreNames.contains('models')) {
+          db.createObjectStore('models', { keyPath: 'id' });
+        }
+      };
+    })();
   });
 }
 function idbGet(id) {
@@ -2022,6 +2074,8 @@ renderThemes();
 renderTiers();
 renderLadder();
 loadState();
+$('buildTag').textContent = 'build ' + BUILD;
+setTimeout(checkFresh, 2500);
 var board = $('board');
 board.addEventListener('pointerdown', onDown);
 board.addEventListener('pointermove', onMove);
