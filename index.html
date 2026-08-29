@@ -82,7 +82,7 @@
   .who .nm { font-size: 16px; }
   .who .rt { font-size: 13px; margin-left: 6px; color: color-mix(in srgb, var(--pw) 55%, transparent); }
   .topbar .sp { width: 40px; }
-  .tools { display: flex; flex-direction: column; gap: 6px; padding: 0 16px 10px; }
+  .tools { display: flex; flex-direction: column; gap: 6px; padding: 10px 16px 0; }
   .tool {
     display: flex; align-items: center; justify-content: space-between;
     padding: 7px 12px; border-radius: 8px; font-size: 14px;
@@ -182,15 +182,15 @@
     <div class="who"><span class="nm" id="oppName"></span><span class="rt" id="oppRt"></span></div>
     <div class="sp"></div>
   </div>
-  <div class="tools">
-    <button class="tool" id="coachBtn">Coach <span class="pips" id="coachPips"></span></button>
-    <button class="tool" id="tbBtn">Takeback <span class="pips" id="tbPips"></span></button>
-  </div>
   <div id="board">
     <div id="squares"></div>
     <div id="marks"></div>
     <div id="pieces"></div>
     <div id="hints"></div>
+  </div>
+  <div class="tools">
+    <button class="tool" id="coachBtn">Coach <span class="pips" id="coachPips"></span></button>
+    <button class="tool" id="tbBtn">Takeback <span class="pips" id="tbPips"></span></button>
   </div>
   <div id="status"></div>
 </section>
