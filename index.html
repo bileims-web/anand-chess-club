@@ -447,7 +447,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.9';
+var BUILD = '2026-08-29.10';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -1206,9 +1206,9 @@ function coachPayload(d) {
   });
   if (d.agree) {
     lines.push('Anand’s suggestion: ' + d.anandSan + ' — the SAME move as Stockfish’s best.');
-    lines.push('They agree. Give ONE short line saying the Computer and GM Anand both ' +
+    lines.push('They agree. Give ONE short line saying the Computer and Anand both ' +
       'recommend ' + d.bestSan + ' and, in plain words, why it is good. Do not ' +
-      'manufacture a disagreement. Call Stockfish "the Computer" and Anand "GM Anand".');
+      'manufacture a disagreement. Call Stockfish "the Computer" and Anand "Anand".');
     lines.push(COACH_JSON_RULE);
     lines.push('Use only the "computer" key; omit "anand".');
   } else {
@@ -1217,7 +1217,7 @@ function coachPayload(d) {
       d.anandCost.toFixed(1) + ' percentage points worse than the best move' +
       ' | line after it: ' + d.anandLine);
     lines.push('Give two short pieces of prose: the Computer voice explaining the best ' +
-      'move, and the GM Anand voice pitching his suggestion in his sharp voice while ' +
+      'move, and the Anand voice pitching his suggestion in his sharp voice while ' +
       'stating plainly what it costs.');
     lines.push(COACH_JSON_RULE);
   }
@@ -1353,7 +1353,7 @@ function parseCoachReply(txt, d) {
   var aText = take('anand');
   var parts = [];
   if (cText) parts.push('Computer: ' + cText);
-  if (aText && voices.anand) parts.push('GM Anand: ' + aText);
+  if (aText && voices.anand) parts.push('Anand: ' + aText);
   var text = parts.join('\n\n');
   if (!text) text = ('' + txt).trim();
   return { text: text, voices: voices };
@@ -1394,7 +1394,7 @@ function showCoachVisuals(v) {
     var wrap = document.createElement('div');
     wrap.className = 'rvarrowwrap';
     // one colour for both voices: which voice is showing is clear from the tap
-    wrap.innerHTML = rvArrowSvg([{ uci: info.uci, color: '#C08A3E' }], viewColor === 'b');
+    wrap.innerHTML = rvOverlaySvg([{ uci: info.uci, color: '#C08A3E' }], [], viewColor === 'b');
     layer.appendChild(wrap);
   }
   coachVisual = v;
@@ -1436,7 +1436,7 @@ function coachShow(fen, payload) {
   clearCoachVisuals();
   var s = $('status');
   s.classList.add('coach');   // left-aligned, keeps blank lines
-  s.innerHTML = escapeHtml(text).replace(/^(Computer:|GM Anand:)/gm, function (h) {
+  s.innerHTML = escapeHtml(text).replace(/^(Computer:|Anand:)/gm, function (h) {
     var v = h.charAt(0) === 'C' ? 'computer' : 'anand';
     if (!coachVoices || !coachVoices[v]) return '<span class="voice">' + h + '</span>';
     return '<button class="voice tapvoice" data-voice="' + v + '">' +
@@ -1520,6 +1520,17 @@ var RV_LABELS = {
   excellent:  { sym: '',   txt: 'Excellent',     cls: '',            flag: false },
   good:       { sym: '',   txt: 'Good',          cls: '',            flag: false }
 };
+var RV_BADGES = {
+  great:      { sym: '★',  fill: '#C08A3E', fg: '#1A1D22' },
+  best:       { sym: '✓',  fill: '#4E9E58', fg: '#FFFFFF' },
+  excellent:  { sym: '✓',  fill: '#6FA277', fg: '#FFFFFF' },
+  good:       { sym: '•',  fill: '#6C8570', fg: '#FFFFFF' },
+  inaccuracy: { sym: '?!', fill: '#C9B653', fg: '#23261C' },
+  mistake:    { sym: '?',  fill: '#D08640', fg: '#FFFFFF' },
+  blunder:    { sym: '??', fill: '#C4534F', fg: '#FFFFFF' },
+  missed:     { sym: '×',  fill: '#9E72CC', fg: '#FFFFFF' }
+};
+
 var RV_BOOK_PLIES = 10;   // moves this early count as "in book" for the Great rule
 var RV_DEPTH = 12;        // deep enough to be right about what a 1000 can use
 var RV_SKIP_PLIES = 6;    // opening theory: nothing to learn, so don't spend on it
@@ -1952,7 +1963,7 @@ function renderReview() {
     // analysis is done and on screen; this line is just a quiet note
     pw.classList.remove('hidden');
     $('rvBar').classList.add('hidden');
-    $('rvProgTxt').textContent = 'GM Anand is writing ' + (rv.exDone + 1) + ' of ' + rv.exTotal + '…';
+    $('rvProgTxt').textContent = 'Anand is writing ' + (rv.exDone + 1) + ' of ' + rv.exTotal + '…';
   } else if (rv.status === 'error') {
     $('rvBar').classList.remove('hidden');
     pw.classList.remove('hidden');
@@ -2017,40 +2028,70 @@ function renderRvMoves(rv) {
   }
 }
 
-// arrows: [{uci, color}] — drawn over the board, played move and better move
-function rvArrowSvg(arrows, flip) {
+// Overlay drawn in board units: the viewBox is 100 wide, so one square is
+// 12.5 and every size below is a fraction of a square rather than pixels.
+var SQU = 12.5;
+var ARROW_SHAFT = 0.13 * SQU;    // shaft width
+var ARROW_HEAD_W = 0.30 * SQU;   // head across
+var ARROW_HEAD_L = 0.26 * SQU;   // head along
+var ARROW_GAP = 0.34 * SQU;      // clear the piece the move starts from
+var BADGE_R = 0.16 * SQU;        // 32% of a square across
+
+// arrows: [{uci, color}]   badges: [{sq, label}]
+function rvOverlaySvg(arrows, badges, flip) {
   var mid = function (sq) {
     var f = FILES.indexOf(sq.charAt(0));
     var r = 8 - parseInt(sq.charAt(1), 10);
     if (flip) { f = 7 - f; r = 7 - r; }
-    return { x: f * 12.5 + 6.25, y: r * 12.5 + 6.25 };
+    return { x: f * SQU + SQU / 2, y: r * SQU + SQU / 2 };
   };
-  // colours are written straight onto the shapes: nothing here depends on
-  // inherited CSS resolving inside <marker>, which is where arrows vanish
   var body = '';
-  var defs = '';
-  arrows.forEach(function (a, i) {
+
+  (arrows || []).forEach(function (a) {
     if (!a || !a.uci || a.uci.length < 4) return;
     var from = mid(a.uci.slice(0, 2));
     var to = mid(a.uci.slice(2, 4));
-    // stop the line short so the head sits on the target square
     var dx = to.x - from.x, dy = to.y - from.y;
-    var len = Math.sqrt(dx * dx + dy * dy) || 1;
-    var ex = to.x - (dx / len) * 3.2, ey = to.y - (dy / len) * 3.2;
-    defs += '<marker id="rvhead' + i + '" markerWidth="3.4" markerHeight="3.4" ' +
-      'refX="1.2" refY="1.7" orient="auto">' +
-      '<path d="M0,0 L3.4,1.7 L0,3.4 z" fill="' + a.color + '"></path></marker>';
-    body += '<line x1="' + from.x + '" y1="' + from.y + '" x2="' + ex + '" y2="' + ey +
-      '" stroke="' + a.color + '" stroke-width="2.6" stroke-linecap="round" ' +
-      'opacity="0.9" marker-end="url(#rvhead' + i + ')"></line>';
+    var len = Math.sqrt(dx * dx + dy * dy);
+    if (!len) return;
+    var ux = dx / len, uy = dy / len;
+    // start clear of the origin piece, stop the shaft where the head begins
+    var gap = Math.min(ARROW_GAP, len * 0.45);
+    var sx = from.x + ux * gap, sy = from.y + uy * gap;
+    var bx = to.x - ux * ARROW_HEAD_L, by = to.y - uy * ARROW_HEAD_L;
+    var px = -uy, py = ux, h = ARROW_HEAD_W / 2;
+    body += '<line x1="' + sx.toFixed(2) + '" y1="' + sy.toFixed(2) +
+      '" x2="' + bx.toFixed(2) + '" y2="' + by.toFixed(2) + '" stroke="' + a.color +
+      '" stroke-width="' + ARROW_SHAFT.toFixed(2) + '" stroke-linecap="round" opacity="0.8"></line>';
+    body += '<polygon points="' + to.x.toFixed(2) + ',' + to.y.toFixed(2) + ' ' +
+      (bx + px * h).toFixed(2) + ',' + (by + py * h).toFixed(2) + ' ' +
+      (bx - px * h).toFixed(2) + ',' + (by - py * h).toFixed(2) +
+      '" fill="' + a.color + '" opacity="0.8"></polygon>';
   });
+
+  (badges || []).forEach(function (b) {
+    var spec = b && RV_BADGES[b.label];
+    if (!spec || !b.sq) return;
+    var c = mid(b.sq);
+    // top-right corner of the destination square, overlapping its edge
+    var cx = Math.max(BADGE_R, Math.min(100 - BADGE_R, c.x + SQU / 2));
+    var cy = Math.max(BADGE_R, Math.min(100 - BADGE_R, c.y - SQU / 2));
+    var fs = spec.sym.length > 1 ? BADGE_R * 1.05 : BADGE_R * 1.35;
+    body += '<circle cx="' + cx.toFixed(2) + '" cy="' + cy.toFixed(2) + '" r="' +
+      BADGE_R.toFixed(2) + '" fill="' + spec.fill +
+      '" stroke="rgba(0,0,0,.4)" stroke-width="0.25"></circle>' +
+      '<text x="' + cx.toFixed(2) + '" y="' + cy.toFixed(2) + '" dy="0.36em" ' +
+      'text-anchor="middle" font-size="' + fs.toFixed(2) + '" font-weight="700" ' +
+      'font-family="-apple-system, sans-serif" fill="' + spec.fg + '">' + spec.sym + '</text>';
+  });
+
   return '<svg class="rvarrows" viewBox="0 0 100 100" preserveAspectRatio="none">' +
-    '<defs>' + defs + '</defs>' + body + '</svg>';
+    body + '</svg>';
 }
 
 // Renders through the same place()/coords() the playing board uses, with the
 // same .sq and .piece classes, so it is the same board and the same theme.
-function renderReviewBoard(fen, lastUci, arrows) {
+function renderReviewBoard(fen, lastUci, arrows, badges) {
   var box = $('rvBoard');
   box.innerHTML = '';
   var f, r, el;
@@ -2080,10 +2121,10 @@ function renderReviewBoard(fen, lastUci, arrows) {
       file++;
     }
   }
-  if (arrows && arrows.length) {
+  if ((arrows && arrows.length) || (badges && badges.length)) {
     var layer = document.createElement('div');
     layer.className = 'rvarrowwrap';
-    layer.innerHTML = rvArrowSvg(arrows, viewColor === 'b');
+    layer.innerHTML = rvOverlaySvg(arrows, badges, viewColor === 'b');
     box.appendChild(layer);
   }
 }
@@ -2101,12 +2142,15 @@ function renderRvDetail(rv) {
   }
   // your move, and the move that was better
   var arrows = [];
-  if (lastUci) arrows.push({ uci: lastUci, color: '#E0524D' });
+  if (lastUci) arrows.push({ uci: lastUci, color: '#B8706B' });
   if (shown && shown.flagged && shown.bestUci && shown.bestUci !== lastUci) {
-    arrows.push({ uci: shown.bestUci, color: '#4BAF57' });
+    arrows.push({ uci: shown.bestUci, color: '#6E9E74' });
   }
+  // one badge, on the destination of the move currently on screen
+  var badges = [];
+  if (shown && shown.uci) badges.push({ sq: shown.uci.slice(2, 4), label: shown.label });
   viewColor = rv.color;          // the board shows the game as you played it
-  renderReviewBoard(rv.fens[rvPly], lastUci, arrows);
+  renderReviewBoard(rv.fens[rvPly], lastUci, arrows, badges);
 
   $('rvPlyTxt').textContent = rvPly === 0
     ? 'start'
@@ -2124,13 +2168,13 @@ function renderRvDetail(rv) {
     ' (' + RV_LABELS[m.label].txt + '). Best: ' + m.bestSan + '.';
   var body = '';
   if (m.flagged) {
-    if (m.explanations[reviewTier]) body = 'GM Anand: ' + m.explanations[reviewTier];
+    if (m.explanations[reviewTier]) body = 'Anand: ' + m.explanations[reviewTier];
     else if (m.exErrors[reviewTier]) body = '(No explanation — ' + m.exErrors[reviewTier] + ')';
-    else body = rv.status === 'done' ? '' : '(GM Anand is writing…)';
+    else body = rv.status === 'done' ? '' : '(Anand is writing…)';
   }
   $('rvExplain').innerHTML =
     '<span class="' + RV_LABELS[m.label].cls + '">' + escapeHtml(head) + '</span>' +
-    (body ? '\n' + escapeHtml(body).replace(/^(GM Anand:)/, '<span class="voice">$1</span>') : '');
+    (body ? '\n' + escapeHtml(body).replace(/^(Anand:)/, '<span class="voice">$1</span>') : '');
 }
 
 // ---------- Resign, draw offers, and his resignation ----------
