@@ -159,15 +159,20 @@
     border: 1px solid color-mix(in srgb, var(--pw) 15%, transparent);
   }
   .tool:disabled { opacity: .4; cursor: default; }
-  /* The global tap-highlight is off, so a press needs its own answer. */
+  /* The global tap-highlight is off, so a press needs its own answer:
+     it lights up brass, sinks under the finger, and springs back. */
+  .tool { transition: transform 90ms ease-out, background-color 90ms linear,
+                      border-color 90ms linear, color 90ms linear; }
   .tool:not(:disabled):active {
-    background: color-mix(in srgb, var(--brass) 22%, transparent);
-    border-color: var(--brass); transform: scale(.97);
+    background: color-mix(in srgb, var(--brass) 34%, transparent);
+    border-color: var(--brass); color: var(--brass); transform: scale(.955);
   }
-  .tool.tapped { animation: toolpulse 260ms ease-out; }
+  .tool.tapped { animation: toolpulse 340ms ease-out; }
   @keyframes toolpulse {
-    0%   { background: color-mix(in srgb, var(--brass) 34%, transparent);
-           border-color: var(--brass); transform: scale(.97); }
+    0%   { background: color-mix(in srgb, var(--brass) 55%, transparent);
+           border-color: var(--brass); color: var(--brass); transform: scale(.955); }
+    45%  { background: color-mix(in srgb, var(--brass) 30%, transparent);
+           border-color: var(--brass); color: var(--brass); transform: scale(1.015); }
     100% { background: transparent; transform: scale(1); }
   }
   .pips { display: flex; gap: 6px; }
@@ -188,6 +193,15 @@
   .sq, .mark, .hint, .piece { position: absolute; width: 12.5%; height: 12.5%; }
   .sq.l { background-color: var(--light); }
   .sq.d { background-color: var(--dark); }
+  /* Board coordinates: off unless switched on in Settings. Each label sits
+     in its own corner of the edge square, tinted like the opposite colour
+     so it reads on both. */
+  .sq .cf, .sq .cr { position: absolute; font-size: 3cqi; line-height: 1; font-weight: 600; }
+  .sq .cf { right: 4%; bottom: 2%; }
+  .sq .cr { left: 4%; top: 2%; }
+  .sq.l .cf, .sq.l .cr { color: color-mix(in srgb, var(--dark) 82%, transparent); }
+  .sq.d .cf, .sq.d .cr { color: color-mix(in srgb, var(--light) 82%, transparent); }
+  body:not(.coords) .sq .cf, body:not(.coords) .sq .cr { display: none; }
   .mark.last { background: rgba(192,138,62,.28); }
   .mark.sel  { box-shadow: inset 0 0 0 2px var(--brass); }
   .mark.chk  { background: radial-gradient(circle, rgba(205,62,50,.6), rgba(205,62,50,0) 72%); }
@@ -490,6 +504,8 @@
       <div class="swatches" id="themeSwatches"></div>
       <p class="sheetlab">Pieces</p>
       <div class="swatches" id="pieceSwatches"></div>
+      <p class="sheetlab">Coordinates</p>
+      <div class="swatches" id="coordSwatches"></div>
       <p class="credits">
         Pieces: Merida by Armando Hernandez Marroquin and Cburnett by Colin M.L.
         Burnett (GPLv2+); Chessnut by Alexis Luengas (Apache-2.0); Alpha by Eric
@@ -604,6 +620,7 @@ function isPieceSet(id) {
   return false;
 }
 var pieceSet = 'classic';
+var coordsOn = false;      // board coordinates: a Settings choice, off by default
 
 // The single source of truth for piece artwork, used by the playing board
 // and the review board alike. Falls back to the glyph if a set is missing.
@@ -669,7 +686,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.39';
+var BUILD = '2026-08-29.40';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -739,6 +756,22 @@ function renderSettings() {
     };
     pb.appendChild(b);
   });
+
+  var cb = $('coordSwatches');
+  cb.innerHTML = '';
+  [['off', 'Off'], ['on', 'Show a–h, 1–8']].forEach(function (opt) {
+    var b = document.createElement('button');
+    var wants = opt[0] === 'on';
+    b.className = 'swatch' + (coordsOn === wants ? ' on' : '');
+    b.textContent = opt[1];
+    b.onclick = function () {
+      coordsOn = wants;
+      document.body.classList.toggle('coords', coordsOn);
+      saveState();
+      renderSettings();
+    };
+    cb.appendChild(b);
+  });
 }
 
 function forgetApiKey() {
@@ -767,6 +800,7 @@ function saveState() {
     progress: progress,
     theme: document.body.dataset.theme,
     pieceSet: pieceSet,
+    coordsOn: coordsOn,
     color: chosenColor,
     spendTotal: spendTotal
   }).catch(function () {});   // private mode / quota: play on unsaved
@@ -781,6 +815,10 @@ function loadState() {
     }
     if (isTheme(st.theme)) document.body.dataset.theme = st.theme;
     if (isPieceSet(st.pieceSet)) pieceSet = st.pieceSet;
+    if (typeof st.coordsOn === 'boolean') {
+      coordsOn = st.coordsOn;
+      document.body.classList.toggle('coords', coordsOn);
+    }
     if (st.color === 'w' || st.color === 'b') chosenColor = st.color;
     if (typeof st.spendTotal === 'number' && isFinite(st.spendTotal)) {
       spendTotal += st.spendTotal;   // add, in case a call already billed
@@ -857,6 +895,21 @@ function buildSquares() {
     d.className = 'sq ' + ((f + r) % 2 === 0 ? 'l' : 'd');
     d.style.transform = 'translate(' + (f * 100) + '%, ' + (r * 100) + '%)';
     box.appendChild(d);
+  }
+  labelSquares();
+}
+
+// Files along the bottom edge, ranks up the left edge — the names the
+// board actually shows, so they follow the flip when you play Black.
+function labelSquares() {
+  var sqs = $('squares').children;
+  for (var r = 0; r < 8; r++) for (var f = 0; f < 8; f++) {
+    var d = sqs[r * 8 + f];
+    if (!d) continue;
+    var name = sqName(f, r);
+    d.innerHTML =
+      (r === 7 ? '<span class="cf">' + name[0] + '</span>' : '') +
+      (f === 0 ? '<span class="cr">' + name[1] + '</span>' : '');
   }
 }
 
@@ -2495,6 +2548,9 @@ function renderReviewBoard(fen, lastUci, arrows, badges) {
     el = document.createElement('div');
     el.className = 'sq ' + ((f + r) % 2 === 0 ? 'l' : 'd');
     el.style.transform = 'translate(' + (f * 100) + '%, ' + (r * 100) + '%)';
+    var nm = sqName(f, r);
+    el.innerHTML = (r === 7 ? '<span class="cf">' + nm[0] + '</span>' : '') +
+                   (f === 0 ? '<span class="cr">' + nm[1] + '</span>' : '');
     box.appendChild(el);
   }
   if (lastUci) [lastUci.slice(0, 2), lastUci.slice(2, 4)].forEach(function (sq) {
@@ -2859,6 +2915,7 @@ function startGame(o, idx, resume) {
   coachLeft = pipTotal; tbLeft = pipTotal;
   playerColor = resume ? resume.color : chosenColor;
   viewColor = playerColor;
+  labelSquares();            // the edge names follow the flip
   oppColor = playerColor === 'w' ? 'b' : 'w';
   resignOffered = false; oppLostStreak = 0; oppWinPct = 50;
   coachedFens = {};
