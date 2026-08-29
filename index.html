@@ -676,11 +676,23 @@ function idbDelete(id) {
   });
 }
 
+// Tag an error with the stage that produced it, so failures are never generic.
+function stageErr(stage) {
+  return function (err) {
+    var msg = err && err.message ? err.message : 'unknown error';
+    if (msg.lastIndexOf(stage, 0) === 0) throw err;   // already tagged
+    throw new Error(stage + ' — ' + msg);
+  };
+}
+
 function getCoachKey() {
-  return idbGet('claude-api-key').then(function (rec) {
+  return idbGet('claude-api-key').catch(function (e) {
+    throw new Error('Key storage (IndexedDB) unavailable — ' + (e && e.message ? e.message : e));
+  }).then(function (rec) {
     if (rec && rec.key) return rec.key;
     var k = window.prompt('Paste your Claude API key for the Coach (kept only on this device):');
-    if (!k || !k.trim()) throw new Error('no API key entered');
+    if (k === null) throw new Error('No API key — the prompt was cancelled. Tap Coach to try again');
+    if (!k.trim()) throw new Error('No API key — nothing was entered. Tap Coach to try again');
     k = k.trim();
     return idbPut({ id: 'claude-api-key', key: k }).catch(function () {}).then(function () { return k; });
   });
@@ -692,10 +704,12 @@ var coachText = {};   // fen -> successful Claude prose
 
 function coachEngineData(fen) {
   if (coachData[fen]) return coachData[fen];
-  var p = SF.init().then(function () {
+  var p = SF.init().catch(stageErr('Stockfish didn’t load')).then(function () {
     return Promise.all([
-      SF.analyse(fen, { depth: 18, multipv: 3 }),
-      ANAND.init().then(function () { return ANAND.evaluate(fen); })
+      SF.analyse(fen, { depth: 18, multipv: 3 }).catch(stageErr('Stockfish analysis failed')),
+      ANAND.init().catch(stageErr('Anand’s net didn’t load')).then(function () {
+        return ANAND.evaluate(fen).catch(stageErr('Anand’s net failed'));
+      })
     ]);
   }).then(function (rs) {
     var sf = rs[0];
@@ -723,7 +737,9 @@ function coachEngineData(fen) {
       promotion: d.anandUci.length > 4 ? d.anandUci.slice(4) : undefined
     });
     var childFen = g.fen();
-    return SF.analyse(childFen, { depth: 18, multipv: 1 }).then(function (r2) {
+    return SF.analyse(childFen, { depth: 18, multipv: 1 })
+      .catch(stageErr('Stockfish check of Anand’s move failed'))
+      .then(function (r2) {
       var reply = r2.pvs[0];
       d.anandWin = 100 - winPct(pvToCp(reply));   // child eval is opponent-to-move
       d.anandCost = d.bestWin - d.anandWin;
@@ -779,14 +795,25 @@ function coachAsk(payload, key) {
       system: COACH_SYSTEM,
       messages: [{ role: 'user', content: payload }]
     })
+  }).catch(function (e) {
+    // fetch itself failing = no response at all
+    throw new Error('No internet — the Claude API could not be reached (' +
+      (e && e.message ? e.message : e) + ')');
   }).then(function (res) {
-    if (res.status === 401 || res.status === 403) {
-      return idbDelete('claude-api-key').catch(function () {}).then(function () {
-        throw new Error('API key rejected — tap Coach to enter a new one');
-      });
-    }
-    if (!res.ok) throw new Error('Claude API error ' + res.status);
-    return res.json();
+    if (res.ok) return res.json();
+    // pull the API's own explanation out of the error body when there is one
+    return res.json().catch(function () { return {}; }).then(function (body) {
+      var apiMsg = body && body.error && body.error.message ? ' — ' + body.error.message : '';
+      if (res.status === 401 || res.status === 403) {
+        return idbDelete('claude-api-key').catch(function () {}).then(function () {
+          throw new Error('API key rejected' + apiMsg + ' — tap Coach to enter a new one');
+        });
+      }
+      if (res.status === 429) {
+        throw new Error('Claude API error 429 — rate limited or out of credits' + apiMsg);
+      }
+      throw new Error('Claude API error ' + res.status + apiMsg);
+    });
   }).then(function (j) {
     var txt = (j.content || []).filter(function (c) { return c.type === 'text'; })
       .map(function (c) { return c.text; }).join(' ').trim();
@@ -832,17 +859,17 @@ function useCoach() {
         coachSpinner(false);
         coachShow(fen, txt);
       }, function (apiErr) {
-        // API down: still show Stockfish's move, no prose
+        // API failed: still show Stockfish's move, plus the real reason
         coachSpinner(false);
-        coachShow(fen, 'Stockfish: ' + d.bestSan + '. (Coach offline: ' + apiErr.message + ')');
+        coachShow(fen, 'Stockfish: ' + d.bestSan + '. (' + apiErr.message + ')');
       });
     });
   }).catch(function (err) {
-    // nothing useful produced: refund the pip
+    // nothing useful produced: refund the pip and say exactly what broke
     coachSpinner(false);
     coachLeft++;
     renderPips();
-    coachShow(fen, 'Coach unavailable: ' + err.message);
+    coachShow(fen, 'Coach: ' + err.message);
   }).then(function () { coachBusy = false; });
 }
 
