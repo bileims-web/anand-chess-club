@@ -1,73 +1,635 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Anand Chess Club</title>
-  <style>
-    :root { color-scheme: light dark; }
-    body {
-      margin: 0;
-      font-family: Georgia, 'Times New Roman', serif;
-      background: #f5f1e8;
-      color: #2b2b2b;
-      line-height: 1.6;
-    }
-    header {
-      background: #1d3557;
-      color: #f5f1e8;
-      text-align: center;
-      padding: 3rem 1rem 2.5rem;
-    }
-    header h1 { margin: 0 0 0.5rem; font-size: 2.4rem; letter-spacing: 0.02em; }
-    header p { margin: 0; font-style: italic; opacity: 0.85; }
-    main { max-width: 720px; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
-    section { margin-bottom: 2rem; }
-    h2 { color: #1d3557; border-bottom: 2px solid #e0d9c8; padding-bottom: 0.3rem; }
-    footer {
-      text-align: center;
-      padding: 1.5rem 1rem;
-      background: #e9e2d0;
-      font-size: 0.9rem;
-      color: #555;
-    }
-    .pieces { font-size: 2rem; text-align: center; margin-top: 1rem; }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Anand Chess Club</title>
+<style>
+  :root { --brass: #C08A3E; }
+  body[data-theme="slate"] {
+    --bg:#14171C; --dark:#55606E; --light:#D8CEBD;
+    --pw:#F0E9DC; --pb:#262B33; --pb-line:rgba(255,255,255,.20);
+  }
+  body[data-theme="dusk"] {
+    --bg:#1C212A; --dark:#5A6472; --light:#AFAA9C;
+    --pw:#D6D2C8; --pb:#272C35; --pb-line:rgba(255,255,255,.18);
+  }
+  body[data-theme="night"] {
+    --bg:#08090B; --dark:#000000; --light:#474C53;
+    --pw:#B2AEA6; --pb:#2E3238; --pb-line:rgba(178,174,166,.75);
+  }
+  body[data-theme="sage"] {
+    --bg:#1E241F; --dark:#5B6A5C; --light:#AFB39F;
+    --pw:#D5D6C7; --pb:#29312A; --pb-line:rgba(255,255,255,.18);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin:0; height:100%; }
+  body {
+    background: var(--bg);
+    color: var(--pw);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    user-select: none; -webkit-user-select: none;
+  }
+  .hidden { display: none !important; }
+  button { font: inherit; color: inherit; background: none; border: none; padding: 0; cursor: pointer; }
+
+  /* ---------- Ladder screen ---------- */
+  #ladder { max-width: 520px; margin: 0 auto; padding: 16px 16px 40px; }
+  .themes { display: flex; gap: 8px; justify-content: center; margin-bottom: 20px; }
+  .chip {
+    padding: 5px 12px; border-radius: 999px; font-size: 13px;
+    border: 1px solid color-mix(in srgb, var(--pw) 25%, transparent);
+    color: color-mix(in srgb, var(--pw) 70%, transparent);
+  }
+  .chip.on { border-color: var(--brass); color: var(--brass); }
+  h1 {
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 26px; text-align: center; margin: 0 0 4px; letter-spacing: .02em;
+  }
+  .sub {
+    text-align: center; margin: 0 0 22px; font-size: 14px; font-style: italic;
+    color: color-mix(in srgb, var(--pw) 60%, transparent);
+  }
+  .row {
+    display: flex; align-items: center; gap: 12px; width: 100%;
+    padding: 12px 14px; margin-bottom: 8px; border-radius: 10px; text-align: left;
+    border: 1.5px solid color-mix(in srgb, var(--pw) 12%, transparent);
+    background: color-mix(in srgb, var(--pw) 4%, transparent);
+  }
+  .row .nm { flex: 1; font-size: 16px; }
+  .row .rt { font-size: 13px; color: color-mix(in srgb, var(--pw) 55%, transparent); font-variant-numeric: tabular-nums; }
+  .row .st { font-size: 13px; }
+  .row.beaten { opacity: .45; }
+  .row.beaten .st { color: var(--brass); }
+  .row.current { border-color: var(--brass); }
+  .row.locked { opacity: .28; cursor: default; }
+  .row.mg { border-color: #B84A4A; }
+  .divider {
+    display: flex; align-items: center; gap: 10px; margin: 20px 0 12px;
+    font-size: 12px; letter-spacing: .08em; text-transform: uppercase;
+    color: color-mix(in srgb, var(--pw) 45%, transparent);
+  }
+  .divider::before, .divider::after {
+    content: ""; flex: 1; height: 1px;
+    background: color-mix(in srgb, var(--pw) 15%, transparent);
+  }
+
+  /* ---------- Game screen ---------- */
+  #gameScr { max-width: 520px; margin: 0 auto; padding: 10px 0 24px; }
+  .topbar { display: flex; align-items: center; padding: 0 12px 8px; }
+  #back { font-size: 22px; padding: 4px 14px 4px 4px; color: var(--brass); }
+  .who { flex: 1; text-align: center; }
+  .who .nm { font-size: 16px; }
+  .who .rt { font-size: 13px; margin-left: 6px; color: color-mix(in srgb, var(--pw) 55%, transparent); }
+  .topbar .sp { width: 40px; }
+  .tools { display: flex; flex-direction: column; gap: 6px; padding: 0 16px 10px; }
+  .tool {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 7px 12px; border-radius: 8px; font-size: 14px;
+    border: 1px solid color-mix(in srgb, var(--pw) 15%, transparent);
+  }
+  .tool:disabled { opacity: .4; cursor: default; }
+  .pips { display: flex; gap: 6px; }
+  .pip { width: 9px; height: 9px; border-radius: 50%; background: var(--brass); }
+  .pip.spent { opacity: .22; }
+
+  #board {
+    position: relative; width: 100%; aspect-ratio: 1;
+    touch-action: none; container-type: inline-size;
+  }
+  #squares, #marks, #pieces, #hints { position: absolute; inset: 0; }
+  #marks, #hints { pointer-events: none; }
+  #pieces { pointer-events: none; }
+  .sq, .mark, .hint, .piece { position: absolute; width: 12.5%; height: 12.5%; }
+  .sq.l { background: var(--light); }
+  .sq.d { background: var(--dark); }
+  .mark.last { background: rgba(192,138,62,.28); }
+  .mark.sel  { box-shadow: inset 0 0 0 2px var(--brass); }
+  .mark.chk  { background: radial-gradient(circle, rgba(205,62,50,.6), rgba(205,62,50,0) 72%); }
+  .piece {
+    display: flex; align-items: center; justify-content: center;
+    font-size: 6vw; font-size: 9.5cqi; line-height: 1;
+    transition: transform 140ms ease-out, opacity 120ms linear;
+    will-change: transform;
+  }
+  .piece.w { color: var(--pw); text-shadow: 0 1px 2px rgba(0,0,0,.45); }
+  .piece.b {
+    color: var(--pb);
+    text-shadow: -1px 0 0 var(--pb-line), 1px 0 0 var(--pb-line),
+                 0 -1px 0 var(--pb-line), 0 1px 0 var(--pb-line);
+  }
+  .piece.drag { transition: none; z-index: 10; }
+  .piece.gone { opacity: 0; }
+  .piece > span { display: block; }
+  .piece > span.shake { animation: shake 260ms ease-in-out; }
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    20% { transform: translateX(-3px); }
+    40% { transform: translateX(3px); }
+    60% { transform: translateX(-2px); }
+    80% { transform: translateX(2px); }
+  }
+  .hint::after {
+    content: ""; position: absolute; inset: 0; border-radius: 50%;
+  }
+  .hint.dot::after {
+    inset: 36%; background: color-mix(in srgb, var(--brass) 65%, transparent);
+  }
+  .hint.ring::after {
+    inset: 7%; border: 3px solid color-mix(in srgb, var(--brass) 70%, transparent);
+  }
+  #status {
+    min-height: 22px; text-align: center; padding: 12px 16px 0; font-size: 14px;
+    color: color-mix(in srgb, var(--pw) 70%, transparent);
+  }
+
+  /* ---------- End card ---------- */
+  #card {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,.55); z-index: 50; padding: 24px;
+  }
+  .cardbox {
+    background: var(--bg); border: 1.5px solid var(--brass); border-radius: 14px;
+    padding: 26px 24px; max-width: 340px; width: 100%; text-align: center;
+  }
+  .cardbox h2 { font-family: Georgia, serif; margin: 0 0 8px; font-size: 22px; }
+  .cardbox p { margin: 0 0 18px; font-size: 14px; color: color-mix(in srgb, var(--pw) 75%, transparent); }
+  .cardbox .btns { display: flex; gap: 10px; justify-content: center; }
+  .cardbox .btns button {
+    padding: 8px 16px; border-radius: 8px; font-size: 14px;
+    border: 1px solid color-mix(in srgb, var(--pw) 30%, transparent);
+  }
+  .cardbox .btns button.primary { border-color: var(--brass); color: var(--brass); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .piece { transition: none; }
+    .piece > span.shake { animation: none; }
+  }
+</style>
 </head>
-<body>
-  <header>
-    <h1>&#9816; Anand Chess Club</h1>
-    <p>Where every move matters</p>
-  </header>
-  <main>
-    <section>
-      <h2>Welcome</h2>
-      <p>
-        Welcome to the Anand Chess Club! We are a community of chess lovers of
-        all levels &mdash; from first-time players learning how the knight moves
-        to seasoned tournament competitors.
-      </p>
-      <div class="pieces">&#9812; &#9813; &#9814; &#9815; &#9816; &#9817;</div>
-    </section>
-    <section>
-      <h2>What We Do</h2>
-      <ul>
-        <li>Weekly club nights with casual and rated games</li>
-        <li>Beginner coaching sessions</li>
-        <li>Monthly rapid and blitz tournaments</li>
-        <li>Game analysis and puzzle-solving sessions</li>
-      </ul>
-    </section>
-    <section>
-      <h2>Join Us</h2>
-      <p>
-        New members are always welcome. Come along to a club night, bring a
-        friend, and play a few games &mdash; no experience necessary.
-      </p>
-    </section>
-  </main>
-  <footer>
-    Anand Chess Club &middot; Est. 2026
-  </footer>
+<body data-theme="dusk">
+
+<section id="ladder">
+  <div class="themes" id="themes"></div>
+  <h1>Anand Chess Club</h1>
+  <p class="sub">Beat a member to meet the next one.</p>
+  <div id="rows"></div>
+</section>
+
+<section id="gameScr" class="hidden">
+  <div class="topbar">
+    <button id="back" aria-label="Back to ladder">&#8249;</button>
+    <div class="who"><span class="nm" id="oppName"></span><span class="rt" id="oppRt"></span></div>
+    <div class="sp"></div>
+  </div>
+  <div class="tools">
+    <button class="tool" id="coachBtn">Coach <span class="pips" id="coachPips"></span></button>
+    <button class="tool" id="tbBtn">Takeback <span class="pips" id="tbPips"></span></button>
+  </div>
+  <div id="board">
+    <div id="squares"></div>
+    <div id="marks"></div>
+    <div id="pieces"></div>
+    <div id="hints"></div>
+  </div>
+  <div id="status"></div>
+</section>
+
+<div id="card" class="hidden">
+  <div class="cardbox">
+    <h2 id="cardTitle"></h2>
+    <p id="cardMsg"></p>
+    <div class="btns">
+      <button id="rematchBtn">Rematch</button>
+      <button id="ladderBtn" class="primary">Back to ladder</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+<script>
+'use strict';
+
+// ---------- Data (all state lives in memory only) ----------
+var LEVELS = [
+  { name: 'Kavya',  rating: 600 },
+  { name: 'Rohan',  rating: 700 },
+  { name: 'Meera',  rating: 800 },
+  { name: 'Arjun',  rating: 900 },
+  { name: 'Priya',  rating: 1000 },
+  { name: 'Dev',    rating: 1100 },
+  { name: 'Sana',   rating: 1200 },
+  { name: 'Vikram', rating: 1300 },
+  { name: 'Nisha',  rating: 1400 },
+  { name: 'Anand',  rating: 1500 }
+];
+var MEAN_GIRL = { name: 'Mean Girl', rating: 2400, offLadder: true };
+var THEMES = ['slate', 'dusk', 'night', 'sage'];
+var GLYPH = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
+var VAL = { p: 1, n: 3, b: 3, r: 5, q: 9 };
+var COACH_LINES = [
+  'Coach: scan every check, capture and threat before you commit. (Full analysis arrives with the engine.)',
+  'Coach: ask what your opponent’s last move attacks. (Full analysis arrives with the engine.)',
+  'Coach: improve your worst-placed piece. (Full analysis arrives with the engine.)'
+];
+
+var progress = 0;          // ladder levels beaten (memory only)
+var game = null;           // chess.js instance
+var opp = null;            // current opponent
+var oppIndex = -1;         // ladder index, -1 for Mean Girl
+var pieceEls = {};         // square -> piece element
+var selected = null;
+var aiTimer = null;
+var over = false;
+var coachLeft = 3, tbLeft = 3, coachUses = 0;
+
+var $ = function (id) { return document.getElementById(id); };
+var FILES = 'abcdefgh';
+
+function buzz() { if (navigator.vibrate) navigator.vibrate(10); }
+
+// ---------- Themes ----------
+function renderThemes() {
+  var box = $('themes');
+  box.innerHTML = '';
+  THEMES.forEach(function (t) {
+    var b = document.createElement('button');
+    b.className = 'chip' + (document.body.dataset.theme === t ? ' on' : '');
+    b.textContent = t.charAt(0).toUpperCase() + t.slice(1);
+    b.onclick = function () { document.body.dataset.theme = t; renderThemes(); };
+    box.appendChild(b);
+  });
+}
+
+// ---------- Ladder ----------
+function renderLadder() {
+  var box = $('rows');
+  box.innerHTML = '';
+  LEVELS.forEach(function (lv, i) {
+    var b = document.createElement('button');
+    var state = i < progress ? 'beaten' : (i === progress ? 'current' : 'locked');
+    b.className = 'row ' + state;
+    b.innerHTML = '<span class="nm">' + lv.name + '</span>' +
+                  '<span class="rt">' + lv.rating + '</span>' +
+                  '<span class="st">' + (state === 'beaten' ? '✓' : (state === 'locked' ? 'Locked' : '')) + '</span>';
+    if (state !== 'locked') b.onclick = function () { startGame(lv, i); };
+    else b.disabled = true;
+    box.appendChild(b);
+  });
+  var div = document.createElement('div');
+  div.className = 'divider';
+  div.innerHTML = '<span>Not on the ladder</span>';
+  box.appendChild(div);
+  var mg = document.createElement('button');
+  mg.className = 'row mg';
+  mg.innerHTML = '<span class="nm">' + MEAN_GIRL.name + '</span>' +
+                 '<span class="rt">' + MEAN_GIRL.rating + '</span><span class="st"></span>';
+  mg.onclick = function () { startGame(MEAN_GIRL, -1); };
+  box.appendChild(mg);
+}
+
+// ---------- Board setup ----------
+function sqName(f, r) { return FILES[f] + (8 - r); }           // f,r are 0-7 from top-left
+function coords(sq) { return { f: FILES.indexOf(sq[0]), r: 8 - parseInt(sq[1], 10) }; }
+function place(el, sq) {
+  var c = coords(sq);
+  el.style.transform = 'translate(' + (c.f * 100) + '%, ' + (c.r * 100) + '%)';
+  el.dataset.square = sq;
+}
+
+function buildSquares() {
+  var box = $('squares');
+  box.innerHTML = '';
+  for (var r = 0; r < 8; r++) for (var f = 0; f < 8; f++) {
+    var d = document.createElement('div');
+    d.className = 'sq ' + ((f + r) % 2 === 0 ? 'l' : 'd');
+    d.style.transform = 'translate(' + (f * 100) + '%, ' + (r * 100) + '%)';
+    box.appendChild(d);
+  }
+}
+
+function rebuildPieces() {
+  var box = $('pieces');
+  box.innerHTML = '';
+  pieceEls = {};
+  var rows = game.board();
+  for (var r = 0; r < 8; r++) for (var f = 0; f < 8; f++) {
+    var pc = rows[r][f];
+    if (!pc) continue;
+    var el = document.createElement('div');
+    el.className = 'piece ' + pc.color;
+    el.innerHTML = '<span>' + GLYPH[pc.type] + '</span>';
+    place(el, sqName(f, r));
+    box.appendChild(el);
+    pieceEls[sqName(f, r)] = el;
+  }
+}
+
+// ---------- Marks & hints ----------
+function setMarks() {
+  var box = $('marks');
+  box.innerHTML = '';
+  var hist = game.history({ verbose: true });
+  var last = hist[hist.length - 1];
+  if (last) [last.from, last.to].forEach(function (sq) {
+    var m = document.createElement('div');
+    m.className = 'mark last';
+    place(m, sq);
+    box.appendChild(m);
+  });
+  if (selected) {
+    var s = document.createElement('div');
+    s.className = 'mark sel';
+    place(s, selected);
+    box.appendChild(s);
+  }
+  if (game.in_check()) {
+    var side = game.turn();
+    var rows = game.board();
+    for (var r = 0; r < 8; r++) for (var f = 0; f < 8; f++) {
+      var pc = rows[r][f];
+      if (pc && pc.type === 'k' && pc.color === side) {
+        var k = document.createElement('div');
+        k.className = 'mark chk';
+        place(k, sqName(f, r));
+        box.appendChild(k);
+      }
+    }
+  }
+}
+
+function showHints(sq) {
+  var box = $('hints');
+  box.innerHTML = '';
+  game.moves({ square: sq, verbose: true }).forEach(function (m) {
+    var h = document.createElement('div');
+    h.className = 'hint ' + (m.captured ? 'ring' : 'dot');
+    place(h, m.to);
+    box.appendChild(h);
+  });
+}
+function clearHints() { $('hints').innerHTML = ''; }
+
+// ---------- Moves ----------
+function animateMove(mv) {
+  var el = pieceEls[mv.from];
+  if (!el) { rebuildPieces(); return; }
+  delete pieceEls[mv.from];
+
+  var capSq = mv.to;
+  if (mv.flags.indexOf('e') !== -1) capSq = mv.to[0] + mv.from[1];  // en passant
+  if (mv.captured && pieceEls[capSq]) {
+    var dead = pieceEls[capSq];
+    delete pieceEls[capSq];
+    dead.classList.add('gone');
+    setTimeout(function () { dead.remove(); }, 150);
+  }
+
+  place(el, mv.to);
+  pieceEls[mv.to] = el;
+  if (mv.promotion) el.firstChild.textContent = GLYPH[mv.promotion];
+
+  if (mv.flags.indexOf('k') !== -1 || mv.flags.indexOf('q') !== -1) {  // castling: move the rook
+    var rank = mv.from[1];
+    var rf = mv.flags.indexOf('k') !== -1 ? 'h' + rank : 'a' + rank;
+    var rt = mv.flags.indexOf('k') !== -1 ? 'f' + rank : 'd' + rank;
+    var rook = pieceEls[rf];
+    if (rook) { delete pieceEls[rf]; place(rook, rt); pieceEls[rt] = rook; }
+  }
+}
+
+function afterMove(mv) {
+  selected = null;
+  clearHints();
+  setMarks();
+  if (mv.captured || game.in_check()) buzz();
+  if (game.game_over()) { endGame(); return; }
+  if (game.turn() === 'b') {
+    setStatus(opp.name + ' is thinking…');
+    aiTimer = setTimeout(aiMove, 350 + Math.random() * 400);
+  } else {
+    setStatus(game.in_check() ? 'Check! Your move.' : 'Your move.');
+  }
+}
+
+function tryPlayerMove(from, to) {
+  var mv = game.move({ from: from, to: to, promotion: 'q' });
+  if (!mv) return false;
+  animateMove(mv);
+  afterMove(mv);
+  return true;
+}
+
+// ---------- Placeholder opponent (Maia replaces this later) ----------
+function aiMove() {
+  aiTimer = null;
+  if (over) return;
+  var moves = game.moves({ verbose: true });
+  if (!moves.length) return;
+  var noise = Math.max(0.15, (1650 - opp.rating) / 260);
+  var best = null, bestScore = -Infinity;
+  moves.forEach(function (m) {
+    var s = (VAL[m.captured] || 0) + (m.promotion ? VAL[m.promotion] : 0) +
+            noise * (Math.random() + Math.random() + Math.random() - 1.5);
+    if (s > bestScore) { bestScore = s; best = m; }
+  });
+  var mv = game.move(best.san);
+  animateMove(mv);
+  afterMove(mv);
+}
+
+// ---------- Input: tap and drag ----------
+var dragEl = null, dragFrom = null, dragging = false, downPt = null, wasSelected = false;
+
+function squareAt(e) {
+  var rect = $('board').getBoundingClientRect();
+  var f = Math.floor((e.clientX - rect.left) / rect.width * 8);
+  var r = Math.floor((e.clientY - rect.top) / rect.height * 8);
+  if (f < 0 || f > 7 || r < 0 || r > 7) return null;
+  return sqName(f, r);
+}
+
+function playerCanMove() { return !over && game && game.turn() === 'w' && !aiTimer; }
+
+function springBack(el, from) {
+  el.classList.remove('drag');
+  place(el, from);
+  var span = el.firstChild;
+  span.classList.remove('shake');
+  void span.offsetWidth;
+  span.classList.add('shake');
+  setTimeout(function () { span.classList.remove('shake'); }, 300);
+}
+
+function onDown(e) {
+  if (!playerCanMove()) return;
+  e.preventDefault();
+  var sq = squareAt(e);
+  if (!sq) return;
+  var pc = game.get(sq);
+  if (pc && pc.color === 'w') {
+    wasSelected = (selected === sq);
+    selected = sq;
+    showHints(sq);
+    setMarks();
+    dragEl = pieceEls[sq];
+    dragFrom = sq;
+    dragging = false;
+    downPt = { x: e.clientX, y: e.clientY };
+    $('board').setPointerCapture(e.pointerId);
+  } else if (selected) {
+    if (!tryPlayerMove(selected, sq)) {
+      selected = null;
+      clearHints();
+      setMarks();
+    }
+  }
+}
+
+function onMove(e) {
+  if (!dragEl || !downPt) return;
+  if (!dragging) {
+    var dx = e.clientX - downPt.x, dy = e.clientY - downPt.y;
+    if (dx * dx + dy * dy < 36) return;
+    dragging = true;
+    dragEl.classList.add('drag');
+  }
+  var rect = $('board').getBoundingClientRect();
+  var s = rect.width / 8;
+  var x = Math.min(Math.max(e.clientX - rect.left - s / 2, -s / 2), rect.width - s / 2);
+  var y = Math.min(Math.max(e.clientY - rect.top - s / 2, -s / 2), rect.height - s / 2);
+  dragEl.style.transform = 'translate(' + x + 'px, ' + y + 'px)';
+}
+
+function onUp(e) {
+  if (!dragEl) return;
+  var el = dragEl, from = dragFrom;
+  dragEl = null; downPt = null;
+  if (dragging) {
+    dragging = false;
+    el.classList.remove('drag');             // restore transition so the snap glides
+    var to = squareAt(e);
+    if (to === from) {                       // dropped back home: no move attempted
+      place(el, from);
+    } else if (!to || !tryPlayerMove(from, to)) {
+      springBack(el, from);
+      selected = null; clearHints(); setMarks();
+    }
+  } else if (wasSelected) {          // tapped the already-selected piece: deselect
+    selected = null;
+    clearHints();
+    setMarks();
+  }
+}
+
+// ---------- Coach & takeback ----------
+function renderPips() {
+  [['coachPips', coachLeft], ['tbPips', tbLeft]].forEach(function (p) {
+    var box = $(p[0]);
+    box.innerHTML = '';
+    for (var i = 0; i < 3; i++) {
+      var d = document.createElement('span');
+      d.className = 'pip' + (i >= p[1] ? ' spent' : '');
+      box.appendChild(d);
+    }
+  });
+  $('coachBtn').disabled = coachLeft === 0;
+  $('tbBtn').disabled = tbLeft === 0;
+}
+
+function useCoach() {
+  if (coachLeft === 0 || over || game.turn() !== 'w' || aiTimer) return;
+  coachLeft--;
+  setStatus(COACH_LINES[coachUses++ % COACH_LINES.length]);
+  renderPips();
+}
+
+function useTakeback() {
+  if (tbLeft === 0 || over || game.turn() !== 'w' || aiTimer) return;
+  if (game.history().length < 2) return;
+  game.undo();
+  game.undo();
+  tbLeft--;
+  selected = null;
+  clearHints();
+  rebuildPieces();
+  setMarks();
+  renderPips();
+  setStatus('Took back your last move.');
+}
+
+// ---------- Game flow ----------
+function setStatus(t) { $('status').textContent = t; }
+
+function startGame(o, idx) {
+  opp = o; oppIndex = idx;
+  game = new Chess();
+  over = false; selected = null;
+  coachLeft = 3; tbLeft = 3; coachUses = 0;
+  if (aiTimer) { clearTimeout(aiTimer); aiTimer = null; }
+  $('oppName').textContent = o.name;
+  $('oppRt').textContent = o.rating;
+  $('ladder').classList.add('hidden');
+  $('gameScr').classList.remove('hidden');
+  $('card').classList.add('hidden');
+  rebuildPieces();
+  setMarks();
+  clearHints();
+  renderPips();
+  setStatus('Your move — you play White.');
+}
+
+function endGame() {
+  over = true;
+  var title, msg;
+  if (game.in_checkmate()) {
+    var playerWon = game.turn() === 'b';
+    title = 'Checkmate';
+    if (playerWon) {
+      msg = 'You beat ' + opp.name + ' (' + opp.rating + ')!';
+      if (opp.offLadder) {
+        msg += ' She’s not on the ladder — bragging rights only.';
+      } else if (oppIndex === progress) {
+        progress++;
+        msg += progress < LEVELS.length
+          ? ' ' + LEVELS[progress].name + ' (' + LEVELS[progress].rating + ') is now unlocked.'
+          : ' You’ve cleared the whole ladder!';
+      }
+    } else {
+      msg = opp.name + ' beat you. Have another go.';
+    }
+  } else {
+    title = 'Draw';
+    msg = 'The game against ' + opp.name + ' ended in a draw.';
+  }
+  $('cardTitle').textContent = title;
+  $('cardMsg').textContent = msg;
+  $('card').classList.remove('hidden');
+  setStatus('');
+}
+
+function toLadder() {
+  if (aiTimer) { clearTimeout(aiTimer); aiTimer = null; }
+  $('gameScr').classList.add('hidden');
+  $('card').classList.add('hidden');
+  $('ladder').classList.remove('hidden');
+  renderLadder();
+}
+
+// ---------- Wire up ----------
+buildSquares();
+renderThemes();
+renderLadder();
+var board = $('board');
+board.addEventListener('pointerdown', onDown);
+board.addEventListener('pointermove', onMove);
+board.addEventListener('pointerup', onUp);
+board.addEventListener('pointercancel', onUp);
+$('back').onclick = toLadder;
+$('ladderBtn').onclick = toLadder;
+$('rematchBtn').onclick = function () { startGame(opp, oppIndex); };
+$('coachBtn').onclick = useCoach;
+$('tbBtn').onclick = useTakeback;
+</script>
 </body>
 </html>
