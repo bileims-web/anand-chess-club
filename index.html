@@ -463,6 +463,9 @@ function loadState() {
     renderSpend();
     $('resumeBtn').classList.toggle('hidden', !pendingGame);
     $('resumeOpp').textContent = pendingGame ? 'vs ' + pendingGame.oppName : '';
+    // Reopening the app puts you back in the game you were playing, rather
+    // than on the ladder. `!game` so a game already started wins.
+    if (pendingGame && !game) resumeGame();
   });
 }
 
