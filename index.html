@@ -146,6 +146,7 @@
     color: color-mix(in srgb, var(--pw) 70%, transparent);
   }
   #status.coach { text-align: left; white-space: pre-line; }
+  #status.coach .voice { color: #5B9BD5; }
 
   /* ---------- End card ---------- */
   #card {
@@ -791,16 +792,18 @@ function coachPayload(d) {
   });
   if (d.agree) {
     lines.push('Anand’s suggestion: ' + d.anandSan + ' — the SAME move as Stockfish’s best.');
-    lines.push('They agree. Reply with ONE short line saying both recommend ' + d.bestSan +
-      ' and, in plain words, why it is good. Do not manufacture a disagreement.');
+    lines.push('They agree. Reply with ONE short line saying the Computer and GM Anand ' +
+      'both recommend ' + d.bestSan + ' and, in plain words, why it is good. ' +
+      'Do not manufacture a disagreement. Call Stockfish "the Computer" and Anand "GM Anand".');
   } else {
     lines.push('Anand’s suggestion: ' + d.anandSan +
       ' | measured by Stockfish: White win chance ' + d.anandWin.toFixed(1) + '%, which is ' +
       d.anandCost.toFixed(1) + ' percentage points worse than the best move' +
       ' | line after it: ' + d.anandLine);
     lines.push('Reply with exactly two short paragraphs separated by a blank line, ' +
-      'the first starting "Stockfish:" explaining the best move, the second starting ' +
-      '"Anand:" pitching his suggestion in his sharp voice while stating plainly what it costs.');
+      'the first starting "Computer:" (the Stockfish voice) explaining the best move, ' +
+      'the second starting "GM Anand:" pitching his suggestion in his sharp voice ' +
+      'while stating plainly what it costs.');
   }
   return lines.join('\n');
 }
@@ -863,11 +866,19 @@ function coachSpinner(on) {
   }
 }
 
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
 function coachShow(fen, text) {
   // don't clobber the status if the position moved on while we worked
   if (!over && game && game.fen() === fen) {
-    setStatus(text);
-    $('status').classList.add('coach');   // left-aligned, keeps blank lines
+    var s = $('status');
+    s.classList.add('coach');   // left-aligned, keeps blank lines
+    s.innerHTML = escapeHtml(text)
+      .replace(/^(Computer:|GM Anand:)/gm, '<span class="voice">$1</span>');
   }
 }
 
@@ -889,7 +900,7 @@ function useCoach() {
       }, function (apiErr) {
         // API failed: still show Stockfish's move, plus the real reason
         coachSpinner(false);
-        coachShow(fen, 'Stockfish: ' + d.bestSan + '. (' + apiErr.message + ')');
+        coachShow(fen, 'Computer: ' + d.bestSan + '. (' + apiErr.message + ')');
       });
     });
   }).catch(function (err) {
