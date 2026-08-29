@@ -147,6 +147,21 @@
   }
   #status.coach { text-align: left; white-space: pre-line; }
   #status.coach .voice { color: #5B9BD5; }
+  #coachLayer { position: absolute; inset: 0; pointer-events: none; }
+  .mark.coachsq { box-shadow: inset 0 0 0 3px var(--brass); border-radius: 3px; }
+  .mark.coachpiece {
+    box-shadow: inset 0 0 0 3px var(--brass); border-radius: 50%;
+    background: color-mix(in srgb, var(--brass) 20%, transparent);
+  }
+  button.tapvoice {
+    font: inherit; color: #5B9BD5; padding: 0 1px;
+    text-decoration: underline; text-underline-offset: 3px;
+  }
+  button.tapvoice::after { content: " ◧"; font-size: 11px; opacity: .75; }
+  button.tapvoice.on {
+    color: var(--brass); text-decoration: none; border-radius: 4px; padding: 0 5px;
+    background: color-mix(in srgb, var(--brass) 18%, transparent);
+  }
 
   /* ---------- End card ---------- */
   .gametabs { display: flex; justify-content: center; gap: 10px; padding: 10px 16px 0; }
@@ -290,6 +305,7 @@
     <div id="marks"></div>
     <div id="pieces"></div>
     <div id="hints"></div>
+    <div id="coachLayer"></div>
   </div>
   <div class="tools">
     <div class="toolrow">
@@ -422,7 +438,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.7';
+var BUILD = '2026-08-29.8';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -698,6 +714,8 @@ function animateMove(mv) {
 
 function afterMove(mv) {
   selected = null;
+  coachVoices = null;
+  clearCoachVisuals();
   clearHints();
   setMarks();
   if (mv.captured || game.in_check()) buzz();
@@ -925,6 +943,20 @@ var COACH_SYSTEM =
   'merely interesting.\n' +
   'Always be clear whose piece is whose; never call an opponent’s piece "yours".';
 
+// The prose comes back with the squares that matter, in one response.
+// The moves themselves are the engines' and are never sent back by the model.
+var COACH_JSON_RULE =
+  'Reply with ONLY a JSON object and nothing else, in this exact shape:\n' +
+  '{"computer":{"text":"...","keySquares":["e5","f7"],"keyPiece":"c4"},' +
+  '"anand":{"text":"...","keySquares":[],"keyPiece":null}}\n' +
+  '- "text": that voice\u2019s prose, following every rule above. Do not put the ' +
+  'speaker\u2019s name inside the text.\n' +
+  '- "keySquares": up to 3 squares that voice\u2019s point actually turns on, read ' +
+  'from the position and the engine data above. Use [] if you are not certain.\n' +
+  '- "keyPiece": the square of the single piece that voice is talking about, or null ' +
+  'if you are not certain.\n' +
+  'Never name a square or piece that is not really there. Guessing is worse than [].';
+
 function winPct(cp) {
   return 50 + 50 * (2 / (1 + Math.exp(-0.00368208 * cp)) - 1);
 }
@@ -1108,6 +1140,7 @@ function coachEngineData(fen) {
     if (!best) throw new Error('no line found');
     var d = {
       fen: fen,
+      bestUci: sf.bestmove,
       bestSan: sanOf(fen, sf.bestmove),
       bestLine: sanLine(fen, best.line.split(' '), 6),
       bestMate: best.mate,
@@ -1162,18 +1195,20 @@ function coachPayload(d) {
   });
   if (d.agree) {
     lines.push('Anand’s suggestion: ' + d.anandSan + ' — the SAME move as Stockfish’s best.');
-    lines.push('They agree. Reply with ONE short line saying the Computer and GM Anand ' +
-      'both recommend ' + d.bestSan + ' and, in plain words, why it is good. ' +
-      'Do not manufacture a disagreement. Call Stockfish "the Computer" and Anand "GM Anand".');
+    lines.push('They agree. Give ONE short line saying the Computer and GM Anand both ' +
+      'recommend ' + d.bestSan + ' and, in plain words, why it is good. Do not ' +
+      'manufacture a disagreement. Call Stockfish "the Computer" and Anand "GM Anand".');
+    lines.push(COACH_JSON_RULE);
+    lines.push('Use only the "computer" key; omit "anand".');
   } else {
     lines.push('Anand’s suggestion: ' + d.anandSan +
       ' | measured by Stockfish: White win chance ' + d.anandWin.toFixed(1) + '%, which is ' +
       d.anandCost.toFixed(1) + ' percentage points worse than the best move' +
       ' | line after it: ' + d.anandLine);
-    lines.push('Reply with exactly two short paragraphs separated by a blank line, ' +
-      'the first starting "Computer:" (the Stockfish voice) explaining the best move, ' +
-      'the second starting "GM Anand:" pitching his suggestion in his sharp voice ' +
-      'while stating plainly what it costs.');
+    lines.push('Give two short pieces of prose: the Computer voice explaining the best ' +
+      'move, and the GM Anand voice pitching his suggestion in his sharp voice while ' +
+      'stating plainly what it costs.');
+    lines.push(COACH_JSON_RULE);
   }
   return lines.join('\n');
 }
@@ -1250,6 +1285,116 @@ function coachAsk(payload, key, system, model, onCost) {
   });
 }
 
+// ---------- Coach visuals ----------
+var coachVoices = null;   // {computer:{uci,keySquares,keyPiece}, anand:{...}}
+var coachVisual = null;   // which voice is drawn on the board, if any
+
+// Squares are only kept if a real square, and a key piece only if a piece is
+// genuinely standing there. A model that invents one draws nothing.
+function cleanSquares(list, board) {
+  var out = [];
+  if (Object.prototype.toString.call(list) !== '[object Array]') return out;
+  for (var i = 0; i < list.length && out.length < 3; i++) {
+    var sq = list[i];
+    if (typeof sq === 'string' && /^[a-h][1-8]$/.test(sq) && out.indexOf(sq) === -1) out.push(sq);
+  }
+  return out;
+}
+
+function cleanPiece(sq, board) {
+  if (typeof sq !== 'string' || !/^[a-h][1-8]$/.test(sq)) return null;
+  return board.get(sq) ? sq : null;
+}
+
+// Turns the model's reply into display text plus per-voice visuals. If the
+// JSON does not survive, the prose is still shown and the arrow still drawn.
+function parseCoachReply(txt, d) {
+  var board = new Chess(d.fen);
+  var obj = null;
+  try {
+    obj = JSON.parse(txt);
+  } catch (e) {
+    var m = ('' + txt).match(/\{[\s\S]*\}/);
+    if (m) { try { obj = JSON.parse(m[0]); } catch (e2) { obj = null; } }
+  }
+
+  var voices = {
+    computer: { uci: d.bestUci, keySquares: [], keyPiece: null }
+  };
+  if (!d.agree) voices.anand = { uci: d.anandUci, keySquares: [], keyPiece: null };
+
+  if (!obj || typeof obj !== 'object') {
+    // couldn't read it: prose as-is, arrows only
+    return { text: ('' + txt).trim(), voices: voices };
+  }
+
+  function take(key) {
+    var v = obj[key];
+    if (!v || typeof v !== 'object') return '';
+    if (voices[key]) {
+      voices[key].keySquares = cleanSquares(v.keySquares, board);
+      voices[key].keyPiece = cleanPiece(v.keyPiece, board);
+    }
+    return typeof v.text === 'string' ? v.text.trim() : '';
+  }
+
+  var cText = take('computer');
+  var aText = take('anand');
+  var parts = [];
+  if (cText) parts.push('Computer: ' + cText);
+  if (aText && voices.anand) parts.push('GM Anand: ' + aText);
+  var text = parts.join('\n\n');
+  if (!text) text = ('' + txt).trim();
+  return { text: text, voices: voices };
+}
+
+function clearCoachVisuals() {
+  var layer = $('coachLayer');
+  if (layer) layer.innerHTML = '';
+  coachVisual = null;
+  markActiveVoice();
+}
+
+function markActiveVoice() {
+  var btns = $('status').querySelectorAll('button.tapvoice');
+  for (var i = 0; i < btns.length; i++) {
+    btns[i].classList.toggle('on', btns[i].getAttribute('data-voice') === coachVisual);
+  }
+}
+
+function showCoachVisuals(v) {
+  var info = coachVoices && coachVoices[v];
+  var layer = $('coachLayer');
+  if (!info || !layer) return;
+  layer.innerHTML = '';
+  info.keySquares.forEach(function (sq) {
+    var el = document.createElement('div');
+    el.className = 'mark coachsq';
+    place(el, sq);
+    layer.appendChild(el);
+  });
+  if (info.keyPiece) {
+    var kp = document.createElement('div');
+    kp.className = 'mark coachpiece';
+    place(kp, info.keyPiece);
+    layer.appendChild(kp);
+  }
+  if (info.uci) {
+    var wrap = document.createElement('div');
+    wrap.className = 'rvarrowwrap';
+    // one colour for both voices: which voice is showing is clear from the tap
+    wrap.innerHTML = rvArrowSvg([{ uci: info.uci, color: '#C08A3E' }], viewColor === 'b');
+    layer.appendChild(wrap);
+  }
+  coachVisual = v;
+  markActiveVoice();
+}
+
+function toggleCoachVisuals(v) {
+  if (coachVisual === v) clearCoachVisuals();
+  else showCoachVisuals(v);
+}
+
 var coachBusy = false;
 var coachSpinTimer = null;
 var COACH_DOTS = ['.', '..', '...'];
@@ -1272,14 +1417,21 @@ function escapeHtml(s) {
   });
 }
 
-function coachShow(fen, text) {
+function coachShow(fen, payload) {
   // don't clobber the status if the position moved on while we worked
-  if (!over && game && game.fen() === fen) {
-    var s = $('status');
-    s.classList.add('coach');   // left-aligned, keeps blank lines
-    s.innerHTML = escapeHtml(text)
-      .replace(/^(Computer:|GM Anand:)/gm, '<span class="voice">$1</span>');
-  }
+  if (over || !game || game.fen() !== fen) return;
+  var text = typeof payload === 'string' ? payload : payload.text;
+  coachVoices = (payload && payload.voices) || null;
+  clearCoachVisuals();
+  var s = $('status');
+  s.classList.add('coach');   // left-aligned, keeps blank lines
+  s.innerHTML = escapeHtml(text).replace(/^(Computer:|GM Anand:)/gm, function (h) {
+    var v = h.charAt(0) === 'C' ? 'computer' : 'anand';
+    if (!coachVoices || !coachVoices[v]) return '<span class="voice">' + h + '</span>';
+    return '<button class="voice tapvoice" data-voice="' + v + '">' +
+      h.replace(':', '') + '</button>' +
+      '<span class="voice">:</span>';
+  });
 }
 
 // A pip buys the position, not one opinion of it: once you have spent it,
@@ -1293,9 +1445,10 @@ function showCoachForTier(fen) {
     coachSpinner(true);
     return coachEngineData(fen).then(function (d) {
       return coachAsk(coachPayload(d), key, null, TIER_MODELS[coachTier]).then(function (txt) {
-        coachText[ck] = txt;
+        var parsed = parseCoachReply(txt, d);
+        coachText[ck] = parsed;          // cached: switching voices never re-asks
         coachSpinner(false);
-        coachShow(fen, txt);
+        coachShow(fen, parsed);
       }, function (apiErr) {
         // API failed: still show Stockfish's move, plus the real reason
         coachSpinner(false);
@@ -1970,6 +2123,8 @@ function useTakeback() {
   if (game.history().length < 2) return;
   game.undo();
   game.undo();
+  coachVoices = null;
+  clearCoachVisuals();
   tbLeft--;
   selected = null;
   clearHints();
@@ -2396,6 +2551,10 @@ $('startWhite').onclick = function () { startChosen('w'); };
 $('startBlack').onclick = function () { startChosen('b'); };
 $('startResume').onclick = function () { closeStartDialog(); resumeGame(); };
 $('startCancel').onclick = closeStartDialog;
+$('status').addEventListener('click', function (e) {
+  var t = e.target.closest ? e.target.closest('button.tapvoice') : null;
+  if (t) toggleCoachVisuals(t.getAttribute('data-voice'));
+});
 $('resignBtn').onclick = playerResign;
 $('drawBtn').onclick = playerOfferDraw;
 $('reviewBtn').onclick = startReview;
