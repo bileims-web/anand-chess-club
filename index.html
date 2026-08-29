@@ -155,6 +155,17 @@
     border: 1px solid color-mix(in srgb, var(--pw) 15%, transparent);
   }
   .tool:disabled { opacity: .4; cursor: default; }
+  /* The global tap-highlight is off, so a press needs its own answer. */
+  .tool:not(:disabled):active {
+    background: color-mix(in srgb, var(--brass) 22%, transparent);
+    border-color: var(--brass); transform: scale(.97);
+  }
+  .tool.tapped { animation: toolpulse 260ms ease-out; }
+  @keyframes toolpulse {
+    0%   { background: color-mix(in srgb, var(--brass) 34%, transparent);
+           border-color: var(--brass); transform: scale(.97); }
+    100% { background: transparent; transform: scale(1); }
+  }
   .pips { display: flex; gap: 6px; }
   .pip { width: 9px; height: 9px; border-radius: 50%; background: var(--brass); }
   .pips.many { gap: 4px; }
@@ -654,7 +665,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.37';
+var BUILD = '2026-08-29.38';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -1701,6 +1712,9 @@ function coachShow(fen, payload) {
   var text = typeof payload === 'string' ? payload : payload.text;
   coachVoices = (payload && payload.voices) || null;
   clearCoachVisuals();
+  // Show the squares the advice turns on straight away; tapping a voice
+  // name still switches between them.
+  if (coachVoices) showCoachVisuals(coachVoices.computer ? 'computer' : 'anand');
   var s = $('status');
   s.classList.add('coach');   // left-aligned, keeps blank lines
   s.innerHTML = escapeHtml(text).replace(/^(Computer:|Anand:)/gm, function (h) {
@@ -3055,6 +3069,18 @@ $('ladderBtn').onclick = toLadder;
 $('rematchBtn').onclick = function () { startGame(opp, oppIndex); };
 $('coachBtn').onclick = useCoach;
 $('tbBtn').onclick = useTakeback;
+// A quick tap can outrun :active, so the press also leaves a short pulse.
+['coachBtn', 'tbBtn'].forEach(function (id) {
+  var b = $(id);
+  b.addEventListener('pointerdown', function () {
+    if (b.disabled) return;
+    b.classList.remove('tapped');
+    void b.offsetWidth;             // restart the animation on a repeat tap
+    b.classList.add('tapped');
+    buzz();
+  });
+  b.addEventListener('animationend', function () { b.classList.remove('tapped'); });
+});
 $('gearLadder').onclick = openSettings;
 $('gearGame').onclick = openSettings;
 $('sheetClose').onclick = closeSettings;
