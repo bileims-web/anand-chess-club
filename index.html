@@ -429,13 +429,18 @@ function tryPlayerMove(from, to) {
 // human-like play). Variety comes from temperature + nucleus (top-p)
 // sampling over the policy, applied to the whole game, mirroring the
 // Temperature/TopP controls of the Maia 3 UCI engine.
-var MAIA_TEMPERATURE = 1.0;  // 1 = sample the human move distribution as-is; 0 = argmax
-var MAIA_TOP_P = 1.0;        // 1 = disabled (no tail cut)
-var PLAYER_ELO = 1000;       // fed as elo_oppo (rough player strength)
-var aiMoveSeq = 0;           // invalidates in-flight evals on new game / takeback
+// Maia is calibrated to reproduce human play, so it samples its policy
+// as-is (T=1). Anand's net is not a human model — sampling it at 1.0
+// just adds noise (early h-pawn pushes were 0.8% tail moves), so he
+// plays close to argmax with only top-move-level variety.
+var MAIA_TEMPERATURE = 1.0;   // ladder: the human distribution, unmodified
+var ANAND_TEMPERATURE = 0.3;  // Anand: sharp; ~90% top move, tail crushed
+var MAIA_TOP_P = 1.0;         // 1 = disabled (no tail cut)
+var PLAYER_ELO = 1000;        // fed as elo_oppo (rough player strength)
+var aiMoveSeq = 0;            // invalidates in-flight evals on new game / takeback
 
-function chooseMaiaMove(moves) {
-  if (MAIA_TEMPERATURE <= 0) return moves[0][0];
+function chooseMaiaMove(moves, temperature) {
+  if (temperature <= 0) return moves[0][0];
   // Nucleus: smallest prefix of the sorted policy with mass >= MAIA_TOP_P.
   var nucleus = [];
   var mass = 0;
@@ -447,7 +452,7 @@ function chooseMaiaMove(moves) {
   // Temperature: p^(1/T), renormalised, then sample.
   var sum = 0;
   var weights = nucleus.map(function (m) {
-    var w = Math.pow(m[1], 1 / MAIA_TEMPERATURE);
+    var w = Math.pow(m[1], 1 / temperature);
     sum += w;
     return w;
   });
@@ -471,7 +476,7 @@ function aiMove() {
     return engine.evaluate(game.fen(), opp.rating, PLAYER_ELO);
   }).then(function (r) {
     if (over || seq !== aiMoveSeq || game.turn() !== 'b' || !r.moves.length) return;
-    var uci = chooseMaiaMove(r.moves);
+    var uci = chooseMaiaMove(r.moves, opp.offLadder ? ANAND_TEMPERATURE : MAIA_TEMPERATURE);
     // keep a touch of think time so instant cached replies still feel human
     var delay = Math.max(0, 400 + Math.random() * 500 - (performance.now() - t0));
     setTimeout(function () {
