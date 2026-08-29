@@ -218,6 +218,16 @@
   .lab-great   { color: #55B85F; }
   .lab-best    { color: #7FBF7F; }
   .lab-missed  { color: #B07CE8; }
+  .toolrow { display: flex; align-items: center; gap: 8px; }
+  .toolrow .tool { flex: 1; min-width: 0; }
+  .tiertoggle { display: inline-flex; gap: 4px; flex: none; }
+  .tiertoggle button {
+    font-size: 11px; padding: 5px 9px; border-radius: 999px; white-space: nowrap;
+    border: 1px solid color-mix(in srgb, var(--pw) 15%, transparent);
+    color: color-mix(in srgb, var(--pw) 45%, transparent);
+  }
+  .tiertoggle button.on { border-color: var(--brass); color: var(--brass); }
+  .rvtoggle { display: flex; align-items: center; gap: 8px; justify-content: center; margin: 2px 0 8px; }
   .tiers { margin: 26px 0 0; }
   .tierrow { display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 8px; }
   .tierrow span[id] { display: inline-flex; gap: 8px; }
@@ -250,10 +260,6 @@
   <button class="row hidden" id="lastReviewBtn">
     <span class="nm">Review last game</span><span class="rt" id="lastReviewOpp"></span>
   </button>
-  <div class="tiers">
-    <div class="tierrow"><span class="tierlab">Coach</span><span id="coachTierChips"></span></div>
-    <div class="tierrow"><span class="tierlab">Review</span><span id="reviewTierChips"></span></div>
-  </div>
   <p class="spend" id="ladderSpend"></p>
   <p class="spend" id="buildTag"></p>
 </section>
@@ -271,7 +277,10 @@
     <div id="hints"></div>
   </div>
   <div class="tools">
-    <button class="tool" id="coachBtn">Coach <span class="pips" id="coachPips"></span></button>
+    <div class="toolrow">
+      <button class="tool" id="coachBtn">Coach <span class="pips" id="coachPips"></span></button>
+      <span class="tiertoggle" id="coachTierToggle"></span>
+    </div>
     <button class="tool" id="tbBtn">Takeback <span class="pips" id="tbPips"></span></button>
   </div>
   <div class="gametabs">
@@ -296,6 +305,10 @@
     <div id="rvGraph"></div>
     <div id="rvDetail" class="hidden">
       <div id="rvMini"></div>
+      <div class="rvtoggle">
+        <span class="tierlab">Explained by</span>
+        <span class="tiertoggle" id="rvTierToggle"></span>
+      </div>
       <div id="rvExplain"></div>
     </div>
     <div class="rvmoves" id="rvMoves"></div>
@@ -374,10 +387,11 @@ var chosenColor = 'w';     // ladder setting: the side you want to play
 var playerColor = 'w';     // this game's side; board flips to match
 var oppColor = 'b';
 var resignOffered = false; // he only asks once per game
+var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.2';
+var BUILD = '2026-08-29.3';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -417,7 +431,7 @@ function renderTierChips(boxId, current, pick) {
   box.innerHTML = '';
   TIERS.forEach(function (t) {
     var b = document.createElement('button');
-    b.className = 'chip' + (current === t ? ' on' : '');
+    b.className = current === t ? 'on' : '';
     b.textContent = t.charAt(0).toUpperCase() + t.slice(1);
     b.onclick = function () { pick(t); };
     box.appendChild(b);
@@ -425,17 +439,27 @@ function renderTierChips(boxId, current, pick) {
 }
 
 function renderTiers() {
-  renderTierChips('coachTierChips', coachTier, function (t) {
-    coachTier = t;
-    renderTiers();
-    saveState();
-  });
-  renderTierChips('reviewTierChips', reviewTier, function (t) {
-    reviewTier = t;
-    renderTiers();
-    saveState();
-    ensureExplanations();
-  });
+  renderTierChips('coachTierToggle', coachTier, setCoachTier);
+  renderTierChips('rvTierToggle', reviewTier, setReviewTier);
+}
+
+function setCoachTier(t) {
+  if (coachTier === t) return;
+  coachTier = t;
+  renderTiers();
+  saveState();
+  // Already paid a pip for this position? Then the other opinion is free.
+  var fen = game && !over ? game.fen() : null;
+  if (fen && coachedFens[fen]) showCoachForTier(fen);
+}
+
+function setReviewTier(t) {
+  if (reviewTier === t) return;
+  reviewTier = t;
+  renderTiers();
+  saveState();
+  renderReviewIfVisible();   // cached tiers switch instantly
+  ensureExplanations();      // fetch whatever this tier is missing
 }
 
 // ---------- Persisted state ----------
@@ -1201,19 +1225,14 @@ function coachShow(fen, text) {
   }
 }
 
-function useCoach() {
-  if (over || game.turn() !== playerColor || aiTimer || coachBusy) return;
-  var fen = game.fen();
-  // Cached per tier: switching tiers asks again rather than replaying the
-  // other tier's answer. The engine work underneath is shared either way.
+// A pip buys the position, not one opinion of it: once you have spent it,
+// flipping the toggle shows the other view of the same position for free.
+function showCoachForTier(fen) {
   var ck = fen + '|' + coachTier;
-  if (coachText[ck]) { coachShow(fen, coachText[ck]); return; }   // cached: free
-  if (coachLeft === 0) return;
-  coachLeft--;
-  renderPips();
-  saveGame();
+  if (coachText[ck]) { coachShow(fen, coachText[ck]); return Promise.resolve(); }
+  if (coachBusy) return Promise.resolve();
   coachBusy = true;
-  getCoachKey().then(function (key) {
+  return getCoachKey().then(function (key) {
     coachSpinner(true);
     return coachEngineData(fen).then(function (d) {
       return coachAsk(coachPayload(d), key, null, TIER_MODELS[coachTier]).then(function (txt) {
@@ -1227,12 +1246,35 @@ function useCoach() {
       });
     });
   }).catch(function (err) {
-    // nothing useful produced: refund the pip and say exactly what broke
     coachSpinner(false);
-    coachLeft++;
-    renderPips();
     coachShow(fen, 'Coach: ' + err.message);
-  }).then(function () { coachBusy = false; });
+    throw err;
+  }).then(function () { coachBusy = false; }, function (e) { coachBusy = false; throw e; });
+}
+
+function useCoach() {
+  if (over || game.turn() !== playerColor || aiTimer || coachBusy) return;
+  var fen = game.fen();
+  if (coachText[fen + '|' + coachTier]) {          // already asked, this view
+    coachShow(fen, coachText[fen + '|' + coachTier]);
+    return;
+  }
+  var paid = !!coachedFens[fen];                   // pip already spent here
+  if (!paid) {
+    if (coachLeft === 0) return;
+    coachLeft--;
+    coachedFens[fen] = true;
+    renderPips();
+    saveGame();
+  }
+  showCoachForTier(fen).catch(function () {
+    if (!paid) {                                   // nothing produced: refund
+      coachLeft++;
+      delete coachedFens[fen];
+      renderPips();
+      saveGame();
+    }
+  });
 }
 
 // ---------- Post-game review ----------
@@ -1915,6 +1957,7 @@ function startGame(o, idx, resume) {
   playerColor = resume ? resume.color : chosenColor;
   oppColor = playerColor === 'w' ? 'b' : 'w';
   resignOffered = false; oppLostStreak = 0; oppWinPct = 50;
+  coachedFens = {};
   if (resume) {
     // replay the saved moves; anything illegal means a stale record
     for (var ri = 0; ri < resume.sans.length; ri++) {
