@@ -877,7 +877,13 @@ function coachPayload(d) {
   return lines.join('\n');
 }
 
-function coachAsk(payload, key, system) {
+// The live Coach runs on Sonnet: it must answer in a second or two on a
+// narrow, well-specified task. The review writes its explanations offline,
+// where the stronger model is worth the extra time.
+var COACH_MODEL = 'claude-sonnet-5';
+var REVIEW_MODEL = 'claude-opus-4-6';
+
+function coachAsk(payload, key, system, model) {
   return fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -887,7 +893,7 @@ function coachAsk(payload, key, system) {
       'anthropic-dangerous-direct-browser-access': 'true'
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-5',
+      model: model || COACH_MODEL,
       max_tokens: 400,
       system: system || COACH_SYSTEM,
       messages: [{ role: 'user', content: payload }]
@@ -1158,7 +1164,7 @@ function runExplanations(rv) {
     var chain = Promise.resolve();
     flagged.forEach(function (m) {
       chain = chain.then(function () {
-        return coachAsk(reviewPayload(m), key, REVIEW_SYSTEM).then(
+        return coachAsk(reviewPayload(m), key, REVIEW_SYSTEM, REVIEW_MODEL).then(
           function (txt) { m.explanation = txt; },
           function (err) { m.exError = err.message; }
         );
