@@ -290,7 +290,7 @@
     color: color-mix(in srgb, var(--pw) 60%, transparent);
   }
 
-  #card, #offer, #startDlg {
+  #card, #offer, #startDlg, #histMenu {
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
     background: rgba(0,0,0,.55); z-index: 50; padding: 24px;
   }
@@ -307,6 +307,7 @@
     border: 1px solid color-mix(in srgb, var(--pw) 30%, transparent);
   }
   .cardbox .btns button.primary { border-color: var(--brass); color: var(--brass); }
+  .cardbox .btns button.danger { border-color: #D9534F; color: #D9534F; }
 
   /* ---------- Review screen ---------- */
   #reviewScr { max-width: 520px; margin: 0 auto; padding: 10px 0 32px; }
@@ -371,7 +372,8 @@
   .hrow { display: flex; align-items: center; gap: 10px; width: 100%;
     padding: 11px 14px; margin-bottom: 8px; border-radius: 10px; text-align: left;
     border: 1.5px solid color-mix(in srgb, var(--pw) 12%, transparent);
-    background: color-mix(in srgb, var(--pw) 4%, transparent); }
+    background: color-mix(in srgb, var(--pw) 4%, transparent);
+    -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
   .hrow .hnm { flex: 1; font-size: 15px; }
   .hrow .hsub { display: block; font-size: 12px; margin-top: 2px;
     color: color-mix(in srgb, var(--pw) 45%, transparent); }
@@ -529,6 +531,20 @@
   </div>
 </div>
 
+<div id="histMenu" class="hidden">
+  <div class="cardbox">
+    <h2 id="hmTitle"></h2>
+    <p id="hmSub"></p>
+    <div class="btns">
+      <button id="hmDelete" class="danger">Delete</button>
+      <button id="hmAnalyse" class="primary">Analyse</button>
+    </div>
+    <div class="btns">
+      <button id="hmCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <div id="card" class="hidden">
   <div class="cardbox">
     <h2 id="cardTitle"></h2>
@@ -656,7 +672,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.22';
+var BUILD = '2026-08-29.23';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -2142,9 +2158,66 @@ function renderHistory() {
       '</span></span>' +
       '<span class="hres ' + rec.result + '">' + resultWord(rec) + '</span>' +
       '<span class="hres">&#9654;</span>';
-    b.onclick = function () { openStoredGame(rec); };
+    b.onclick = function () {
+      if (histPressUsed) { histPressUsed = false; return; }
+      openStoredGame(rec);
+    };
+    attachLongPress(b, function () { openHistMenu(rec); });
     box.appendChild(b);
   });
+}
+
+// A long press on a row (or a right-click on desktop) offers Delete and
+// Analyse; a short tap still opens the game directly.
+var histPressUsed = false;   // swallows the click the browser fires afterwards
+
+function attachLongPress(el, fire) {
+  var t = null, x0 = 0, y0 = 0;
+  function used() {
+    histPressUsed = true;
+    // if the browser never delivers the trailing click, the flag must not
+    // eat the next honest tap
+    setTimeout(function () { histPressUsed = false; }, 700);
+    fire();
+  }
+  el.addEventListener('touchstart', function (e) {
+    x0 = e.touches[0].clientX; y0 = e.touches[0].clientY;
+    clearTimeout(t);
+    t = setTimeout(function () { t = null; used(); }, 500);
+  }, { passive: true });
+  el.addEventListener('touchmove', function (e) {
+    if (t && (Math.abs(e.touches[0].clientX - x0) > 10 ||
+              Math.abs(e.touches[0].clientY - y0) > 10)) { clearTimeout(t); t = null; }
+  }, { passive: true });
+  ['touchend', 'touchcancel'].forEach(function (ev) {
+    el.addEventListener(ev, function () { clearTimeout(t); t = null; });
+  });
+  el.addEventListener('contextmenu', function (e) {
+    e.preventDefault();
+    clearTimeout(t); t = null;
+    if ($('histMenu').classList.contains('hidden')) used();
+  });
+}
+
+function openHistMenu(rec) {
+  $('hmTitle').textContent = 'vs ' + rec.opp;
+  var analysed = rec.analysis && rec.analysis.length;
+  $('hmSub').textContent = resultWord(rec) + ' · ' + fmtWhen(rec.ts) +
+    (analysed ? '' : ' · not analysed yet');
+  $('histMenu').classList.remove('hidden');
+  $('hmAnalyse').onclick = function () {
+    $('histMenu').classList.add('hidden');
+    openStoredGame(rec);
+  };
+  $('hmDelete').onclick = function () {
+    $('histMenu').classList.add('hidden');
+    showOffer('Delete this game?', 'It will be dropped from Past Games, along with any ' +
+      'analysis kept with it.', function () {
+      forgetGameRecord(rec);
+      renderHistory();
+    });
+  };
+  $('hmCancel').onclick = function () { $('histMenu').classList.add('hidden'); };
 }
 
 // Rebuild a review object from a stored game. If it was analysed, the
