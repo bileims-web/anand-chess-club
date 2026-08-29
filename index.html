@@ -674,7 +674,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.35';
+var BUILD = '2026-08-29.36';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -1290,19 +1290,29 @@ function pvWithMaterial(fen, ucis, studentColor) {
     return d;
   }
   var before = net();
-  var out = [];
+  var out = [], replies = [];
   for (var i = 0; i < ucis.length && i < 6; i++) {
     var u = ucis[i];
+    // opponent plies sit at odd indices; count their options before moving
+    var legal = out.length % 2 === 1 ? g.moves().length : null;
     var mv = g.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u.length > 4 ? u.slice(4) : undefined });
     if (!mv) break;
     if (out.length >= 3 && !mv.captured) { g.undo(); break; }
     out.push(mv.san);
+    if (legal !== null) replies.push({ san: mv.san, legal: legal });
   }
   return {
     line: out.join(' '),
     before: before,
     after: net(),
-    cont: sanLine(g.fen(), ucis.slice(out.length), 6)
+    cont: sanLine(g.fen(), ucis.slice(out.length), 6),
+    replyNote: replies.length
+      ? 'Opponent replies in the narrated moves: ' + replies.map(function (r) {
+          return r.legal === 1
+            ? r.san + ' is the ONLY legal move (forced)'
+            : r.san + ' is one of ' + r.legal + ' legal replies (NOT forced)';
+        }).join('; ') + '.'
+      : ''
   };
 }
 
@@ -1839,7 +1849,12 @@ var REVIEW_SYSTEM =
   'instead.\n' +
   'If you cannot explain the move in two or three sentences using only ' +
   'the first few moves, say plainly that the reason is long-winded and ' +
-  'just state what the move does. Do not improvise a story.';
+  'just state what the move does. Do not improvise a story.\n' +
+  'When the opponent has more than one reasonable reply, do not say they ' +
+  '"must" play something. Say "if" instead — "if Black blocks with g6…" — ' +
+  'unless it is genuinely the only legal or only sensible move. You are ' +
+  'told for each opponent reply in the line whether it is forced; treat ' +
+  'any reply that is not forced as an "if".';
 
 var RV_LABELS = {
   missed:     { sym: '✗',  txt: 'Missed chance', cls: 'lab-missed',  flag: true },
@@ -1959,6 +1974,7 @@ function buildMoveTable(rv) {
     m.matBefore = pv.before;
     m.matAfter = pv.after;
     m.bestCont = pv.cont;
+    m.replyNote = pv.replyNote;
     m.label = classifyReviewMove(m);
     m.flagged = RV_LABELS[m.label].flag;
     rv.counts[m.label] = (rv.counts[m.label] || 0) + 1;
@@ -1989,6 +2005,7 @@ function reviewPayload(m) {
   } else if (m.bestLineNote) {
     pvLine += ' | ' + m.bestLineNote;   // analyses stored by older builds
   }
+  if (m.replyNote) pvLine += ' | ' + m.replyNote;
   if (m.bestCont) {
     pvLine += ' | The line continues ' + m.bestCont +
       ' — context only: do NOT narrate, quote, or mention anything from it.';
@@ -2076,7 +2093,7 @@ function persistReview(rv) {
       before: m.before, after: m.after, loss: m.loss,
       bestUci: m.bestUci, bestSan: m.bestSan, bestLine: m.bestLine,
       matBefore: m.matBefore, matAfter: m.matAfter, bestCont: m.bestCont,
-      oppSan: m.oppSan, oppGain: m.oppGain,
+      replyNote: m.replyNote, oppSan: m.oppSan, oppGain: m.oppGain,
       explanations: m.explanations, exErrors: m.exErrors
     };
   });
