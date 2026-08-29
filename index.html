@@ -98,6 +98,9 @@
     border: 1.5px solid color-mix(in srgb, var(--pw) 12%, transparent);
     background: color-mix(in srgb, var(--pw) 4%, transparent);
   }
+  .av { width: 38px; height: 38px; border-radius: 50%; flex: none; overflow: hidden; display: block; }
+  .av img, .av svg { width: 100%; height: 100%; display: block; object-fit: cover; }
+  .av-sm { width: 28px; height: 28px; }
   .row .nm { flex: 1; font-size: 16px; }
   .row .rt { font-size: 13px; color: color-mix(in srgb, var(--pw) 55%, transparent); font-variant-numeric: tabular-nums; }
   .row .st { font-size: 13px; }
@@ -120,7 +123,7 @@
   #gameScr { max-width: 520px; margin: 0 auto; padding: 10px 0 24px; }
   .topbar { display: flex; align-items: center; padding: 0 12px 8px; }
   #back { font-size: 22px; padding: 4px 14px 4px 4px; color: var(--brass); }
-  .who { flex: 1; text-align: center; }
+  .who { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; }
   .who .nm { font-size: 16px; }
   .who .rt { font-size: 13px; margin-left: 6px; color: color-mix(in srgb, var(--pw) 55%, transparent); }
   .topbar .sp { width: 40px; }
@@ -398,7 +401,7 @@
 <section id="gameScr" class="hidden">
   <div class="topbar">
     <button id="back" aria-label="Back to ladder">&#8249;</button>
-    <div class="who"><span class="nm" id="oppName"></span><span class="rt" id="oppRt"></span></div>
+    <div class="who"><span id="oppAv"></span><span class="nm" id="oppName"></span><span class="rt" id="oppRt"></span></div>
     <button class="gear" id="gearGame" aria-label="Settings">&#9881;</button>
   </div>
   <div id="board">
@@ -596,6 +599,20 @@ var coachLeft = 3, tbLeft = 3, pipTotal = 3;
 
 // Stronger opponents come with more help: 3 up to 1100, 5 for 1200-1400,
 // 7 from 1600 up (which includes Anand).
+// An opponent's picture. `url` is set once real artwork exists; until then a
+// neutral figure on a disc that warms as the ladder gets harder.
+function avatarHtml(rating, url, small) {
+  var cls = 'av' + (small ? ' av-sm' : '');
+  if (url) return '<span class="' + cls + '"><img src="' + url + '" alt=""></span>';
+  var t = Math.max(0, Math.min(1, (rating - 700) / 1200));
+  var hue = Math.round(205 - t * 165);
+  return '<span class="' + cls + '" style="background:hsl(' + hue + ',26%,34%)">' +
+    '<svg viewBox="0 0 40 40" aria-hidden="true">' +
+    '<circle cx="20" cy="15.5" r="6.4" fill="hsl(' + hue + ',32%,78%)"></circle>' +
+    '<path d="M7.5 36c1.6-7.2 6.6-11 12.5-11s10.9 3.8 12.5 11z" fill="hsl(' + hue + ',32%,78%)"></path>' +
+    '</svg></span>';
+}
+
 function pipAllowance(rating) {
   if (rating >= 1600) return 7;
   if (rating >= 1200) return 5;
@@ -610,7 +627,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.14';
+var BUILD = '2026-08-29.15';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -794,7 +811,8 @@ function renderLadder() {
     var b = document.createElement('button');
     var state = i < progress ? 'beaten' : (i === progress ? 'current' : 'locked');
     b.className = 'row ' + state;
-    b.innerHTML = '<span class="nm">' + lv.name + '</span>' +
+    b.innerHTML = avatarHtml(lv.rating, lv.avatar) +
+                  '<span class="nm">' + lv.name + '</span>' +
                   '<span class="rt">' + lv.rating + '</span>' +
                   '<span class="st">' + (state === 'beaten' ? '✓' : (state === 'locked' ? 'Locked' : '')) + '</span>';
     if (state !== 'locked') b.onclick = function () { openStartDialog(lv, i); };
@@ -807,7 +825,8 @@ function renderLadder() {
   box.appendChild(div);
   var mg = document.createElement('button');
   mg.className = 'row mg';
-  mg.innerHTML = '<span class="nm">' + MEAN_GIRL.name + '</span>' +
+  mg.innerHTML = avatarHtml(MEAN_GIRL.rating, MEAN_GIRL.avatar) +
+                 '<span class="nm">' + MEAN_GIRL.name + '</span>' +
                  '<span class="rt">' + MEAN_GIRL.rating + '</span><span class="st"></span>';
   mg.onclick = function () { openStartDialog(MEAN_GIRL, -1); };
   box.appendChild(mg);
@@ -2086,6 +2105,7 @@ function renderHistory() {
       ? rec.analysis.filter(function (m) { return m.flagged; }).length
       : 0;
     b.innerHTML =
+      avatarHtml(rec.oppRating || 1000, rec.avatar, true) +
       '<span class="hnm">' + escapeHtml(rec.opp) +
       '<span class="hsub">' + (rec.color === 'w' ? 'White' : 'Black') + ' · ' +
       moves + ' moves · ' + fmtWhen(rec.ts) +
@@ -2673,6 +2693,7 @@ function startGame(o, idx, resume) {
     if (game.history().length === 0 && !over) setStatus(openingStatus());
     other.init(function () {}, function () {}).catch(function () {});
   }).catch(function () {});
+  $('oppAv').innerHTML = avatarHtml(o.rating, o.avatar, true);
   $('oppName').textContent = o.name;
   $('oppRt').textContent = o.rating;
   $('ladder').classList.add('hidden');
