@@ -371,7 +371,7 @@ function renderThemes() {
     var b = document.createElement('button');
     b.className = 'chip' + (document.body.dataset.theme === t ? ' on' : '');
     b.textContent = t.charAt(0).toUpperCase() + t.slice(1);
-    b.onclick = function () { document.body.dataset.theme = t; renderThemes(); };
+    b.onclick = function () { document.body.dataset.theme = t; renderThemes(); saveState(); };
     box.appendChild(b);
   });
 }
@@ -396,17 +396,66 @@ function renderTiers() {
     var b = document.createElement('button');
     b.className = 'chip' + (chosenColor === c[0] ? ' on' : '');
     b.textContent = c[1];
-    b.onclick = function () { chosenColor = c[0]; renderTiers(); };
+    b.onclick = function () { chosenColor = c[0]; renderTiers(); saveState(); };
     cbox.appendChild(b);
   });
   renderTierChips('coachTierChips', coachTier, function (t) {
     coachTier = t;
     renderTiers();
+    saveState();
   });
   renderTierChips('reviewTierChips', reviewTier, function (t) {
     reviewTier = t;
     renderTiers();
+    saveState();
     ensureExplanations();
+  });
+}
+
+// ---------- Persisted state ----------
+// Ladder progress and preferences, kept in the same IndexedDB the models
+// use. Device-local: nothing here is ever sent anywhere.
+var STATE_KEY = 'app-state';
+var stateLoaded = false;
+
+function renderSpend() {
+  $('ladderSpend').textContent = spendTotal
+    ? 'Coach & review so far: ' + fmtSpend(spendTotal) : '';
+}
+
+function saveState() {
+  if (!stateLoaded) return;   // never write before the first read lands
+  idbPut({
+    id: STATE_KEY,
+    progress: progress,
+    theme: document.body.dataset.theme,
+    color: chosenColor,
+    coachTier: coachTier,
+    reviewTier: reviewTier,
+    spendTotal: spendTotal
+  }).catch(function () {});   // private mode / quota: play on unsaved
+}
+
+function loadState() {
+  return idbGet(STATE_KEY).then(function (st) {
+    if (!st) return;
+    // never regress: if a level was won before this read landed, keep it
+    if (typeof st.progress === 'number' && st.progress >= 0) {
+      progress = Math.max(progress, Math.min(st.progress, LEVELS.length));
+    }
+    if (THEMES.indexOf(st.theme) !== -1) document.body.dataset.theme = st.theme;
+    if (st.color === 'w' || st.color === 'b') chosenColor = st.color;
+    if (TIERS.indexOf(st.coachTier) !== -1) coachTier = st.coachTier;
+    if (TIERS.indexOf(st.reviewTier) !== -1) reviewTier = st.reviewTier;
+    if (typeof st.spendTotal === 'number' && isFinite(st.spendTotal)) {
+      spendTotal += st.spendTotal;   // add, in case a call already billed
+    }
+  }).catch(function () {}).then(function () {
+    stateLoaded = true;
+    renderThemes();
+    renderTiers();
+    renderLadder();
+    renderSpend();
   });
 }
 
@@ -1042,6 +1091,7 @@ function coachAsk(payload, key, system, model, onCost) {
   }).then(function (j) {
     var cost = askCost(model || TIER_MODELS[coachTier], j.usage);
     spendTotal += cost;
+    saveState();
     if (onCost) onCost(cost);
     var txt = (j.content || []).filter(function (c) { return c.type === 'text'; })
       .map(function (c) { return c.text; }).join(' ').trim();
@@ -1398,7 +1448,7 @@ function renderReview() {
   renderRvDetail(rv);
   var parts = [];
   if (rv.cost) parts.push('This review: ' + fmtSpend(rv.cost));
-  if (spendTotal) parts.push('Session total: ' + fmtSpend(spendTotal));
+  if (spendTotal) parts.push('Total so far: ' + fmtSpend(spendTotal));
   $('rvCost').textContent = parts.join(' · ');
 }
 
@@ -1864,6 +1914,7 @@ function endGame(reason) {
       msg += ' Anand’s not on the ladder — bragging rights only.';
     } else if (oppIndex === progress) {
       progress++;
+      saveState();
       msg += progress < LEVELS.length
         ? ' ' + LEVELS[progress].name + ' (' + LEVELS[progress].rating + ') is now unlocked.'
         : ' You’ve cleared the whole ladder!';
@@ -1892,8 +1943,7 @@ function toLadder() {
   $('ladder').classList.remove('hidden');
   $('lastReviewBtn').classList.toggle('hidden', !lastGameRec);
   $('lastReviewOpp').textContent = lastGameRec ? 'vs ' + lastGameRec.opp : '';
-  $('ladderSpend').textContent = spendTotal
-    ? 'Coach & review this session: ' + fmtSpend(spendTotal) : '';
+  renderSpend();
   renderLadder();
 }
 
@@ -1902,6 +1952,7 @@ buildSquares();
 renderThemes();
 renderTiers();
 renderLadder();
+loadState();
 var board = $('board');
 board.addEventListener('pointerdown', onDown);
 board.addEventListener('pointermove', onMove);
