@@ -139,6 +139,8 @@
   .tool:disabled { opacity: .4; cursor: default; }
   .pips { display: flex; gap: 6px; }
   .pip { width: 9px; height: 9px; border-radius: 50%; background: var(--brass); }
+  .pips.many { gap: 4px; }
+  .pips.many .pip { width: 7px; height: 7px; }
   .pip.spent { opacity: .22; }
 
   #board {
@@ -590,7 +592,15 @@ var pieceEls = {};         // square -> piece element
 var selected = null;
 var aiTimer = null;
 var over = false;
-var coachLeft = 3, tbLeft = 3;
+var coachLeft = 3, tbLeft = 3, pipTotal = 3;
+
+// Stronger opponents come with more help: 3 up to 1100, 5 for 1200-1400,
+// 7 from 1600 up (which includes Anand).
+function pipAllowance(rating) {
+  if (rating >= 1600) return 7;
+  if (rating >= 1200) return 5;
+  return 3;
+}
 var chosenColor = 'w';     // ladder setting: the side you want to play
 var playerColor = 'w';     // this game's side; board flips to match
 var viewColor = 'w';       // side shown at the bottom of the board on screen
@@ -600,7 +610,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.13';
+var BUILD = '2026-08-29.14';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -1129,7 +1139,8 @@ function renderPips() {
   [['coachPips', coachLeft], ['tbPips', tbLeft]].forEach(function (p) {
     var box = $(p[0]);
     box.innerHTML = '';
-    for (var i = 0; i < 3; i++) {
+    box.classList.toggle('many', pipTotal > 5);
+    for (var i = 0; i < pipTotal; i++) {
       var d = document.createElement('span');
       d.className = 'pip' + (i >= p[1] ? ' spent' : '');
       box.appendChild(d);
@@ -2637,7 +2648,8 @@ function startGame(o, idx, resume) {
   opp = o; oppIndex = idx;
   game = new Chess();
   over = false; selected = null;
-  coachLeft = 3; tbLeft = 3;
+  pipTotal = pipAllowance(o.rating);
+  coachLeft = pipTotal; tbLeft = pipTotal;
   playerColor = resume ? resume.color : chosenColor;
   viewColor = playerColor;
   oppColor = playerColor === 'w' ? 'b' : 'w';
