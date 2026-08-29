@@ -673,7 +673,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.29';
+var BUILD = '2026-08-29.30';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -1791,13 +1791,13 @@ var RV_LABELS = {
   mistake:    { sym: '?',  txt: 'Mistake',       cls: 'lab-mistake', flag: true },
   inaccuracy: { sym: '?!', txt: 'Inaccuracy',    cls: 'lab-inacc',   flag: true },
   great:      { sym: '!',  txt: 'Great',         cls: 'lab-great',   flag: true },
-  best:       { sym: '✓',  txt: 'Best',          cls: 'lab-best',    flag: false },
+  best:       { sym: '★',  txt: 'Best',          cls: 'lab-best',    flag: false },
   excellent:  { sym: '',   txt: 'Excellent',     cls: '',            flag: false },
   good:       { sym: '',   txt: 'Good',          cls: '',            flag: false }
 };
 var RV_BADGES = {
-  great:      { sym: '★',  fill: '#C08A3E', fg: '#1A1D22' },
-  best:       { sym: '✓',  fill: '#4E9E58', fg: '#FFFFFF' },
+  great:      { sym: '!',  fill: '#C08A3E', fg: '#1A1D22' },
+  best:       { sym: '★',  fill: '#4E9E58', fg: '#FFFFFF' },
   excellent:  { sym: '✓',  fill: '#6FA277', fg: '#FFFFFF' },
   good:       { sym: '•',  fill: '#6C8570', fg: '#FFFFFF' },
   inaccuracy: { sym: '?!', fill: '#C9B653', fg: '#23261C' },
