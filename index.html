@@ -166,6 +166,50 @@
   }
   .cardbox .btns button.primary { border-color: var(--brass); color: var(--brass); }
 
+  /* ---------- Review screen ---------- */
+  #reviewScr { max-width: 520px; margin: 0 auto; padding: 10px 0 32px; }
+  #rvBody { padding: 0 16px; }
+  .rvbar {
+    height: 6px; border-radius: 3px; overflow: hidden; margin: 10px 0 6px;
+    background: color-mix(in srgb, var(--pw) 12%, transparent);
+  }
+  #rvBarFill { height: 100%; width: 0%; background: var(--brass); transition: width 200ms linear; }
+  #rvProgTxt {
+    font-size: 13px; text-align: center; min-height: 18px;
+    color: color-mix(in srgb, var(--pw) 60%, transparent);
+  }
+  .rvcounts { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin: 10px 0 4px; }
+  .rvchip {
+    font-size: 12px; padding: 3px 10px; border-radius: 999px;
+    border: 1px solid currentColor;
+  }
+  #rvGraph { width: 100%; height: 90px; margin: 8px 0 10px; }
+  #rvGraph svg { width: 100%; height: 100%; display: block; }
+  #rvMini {
+    position: relative; width: 68%; margin: 4px auto 8px; aspect-ratio: 1;
+    container-type: inline-size;
+  }
+  .rvsq { position: absolute; width: 12.5%; height: 12.5%; }
+  .rvsq.l { background: var(--light); }
+  .rvsq.d { background: var(--dark); }
+  .rvsq.hl { box-shadow: inset 0 0 0 2px var(--brass); }
+  #rvExplain { font-size: 14px; padding: 4px 2px 12px; white-space: pre-line; }
+  #rvExplain .voice { color: #5B9BD5; }
+  .rvmoves {
+    display: grid; grid-template-columns: auto 1fr 1fr; gap: 2px 10px;
+    font-size: 14px; align-items: center;
+  }
+  .rvnum { color: color-mix(in srgb, var(--pw) 45%, transparent); font-size: 13px; }
+  .rvmv { text-align: left; padding: 3px 8px; border-radius: 6px; }
+  .rvmv.flag { border: 1px solid currentColor; }
+  .rvmv.sel { background: color-mix(in srgb, var(--pw) 12%, transparent); }
+  .lab-blunder { color: #D9534F; }
+  .lab-mistake { color: #E08A3C; }
+  .lab-inacc   { color: #CDBB4E; }
+  .lab-great   { color: #55B85F; }
+  .lab-best    { color: #7FBF7F; }
+  .lab-missed  { color: #B07CE8; }
+
   @media (prefers-reduced-motion: reduce) {
     .piece { transition: none; }
     .piece > span.shake { animation: none; }
@@ -179,6 +223,9 @@
   <h1>Anand Chess Club</h1>
   <p class="sub">Beat a member to meet the next one.</p>
   <div id="rows"></div>
+  <button class="row hidden" id="lastReviewBtn">
+    <span class="nm">Review last game</span><span class="rt" id="lastReviewOpp"></span>
+  </button>
 </section>
 
 <section id="gameScr" class="hidden">
@@ -200,11 +247,33 @@
   <div id="status"></div>
 </section>
 
+<section id="reviewScr" class="hidden">
+  <div class="topbar">
+    <button id="rvBack" aria-label="Back to ladder">&#8249;</button>
+    <div class="who"><span class="nm">Game review</span><span class="rt" id="rvOpp"></span></div>
+    <div class="sp"></div>
+  </div>
+  <div id="rvBody">
+    <div id="rvProgWrap" class="hidden">
+      <div class="rvbar"><div id="rvBarFill"></div></div>
+      <div id="rvProgTxt"></div>
+    </div>
+    <div class="rvcounts" id="rvCounts"></div>
+    <div id="rvGraph"></div>
+    <div id="rvDetail" class="hidden">
+      <div id="rvMini"></div>
+      <div id="rvExplain"></div>
+    </div>
+    <div class="rvmoves" id="rvMoves"></div>
+  </div>
+</section>
+
 <div id="card" class="hidden">
   <div class="cardbox">
     <h2 id="cardTitle"></h2>
     <p id="cardMsg"></p>
     <div class="btns">
+      <button id="reviewBtn">Review</button>
       <button id="rematchBtn">Rematch</button>
       <button id="ladderBtn" class="primary">Back to ladder</button>
     </div>
@@ -808,7 +877,7 @@ function coachPayload(d) {
   return lines.join('\n');
 }
 
-function coachAsk(payload, key) {
+function coachAsk(payload, key, system) {
   return fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -820,7 +889,7 @@ function coachAsk(payload, key) {
     body: JSON.stringify({
       model: 'claude-sonnet-5',
       max_tokens: 400,
-      system: COACH_SYSTEM,
+      system: system || COACH_SYSTEM,
       messages: [{ role: 'user', content: payload }]
     })
   }).catch(function (e) {
@@ -910,6 +979,375 @@ function useCoach() {
     renderPips();
     coachShow(fen, 'Coach: ' + err.message);
   }).then(function () { coachBusy = false; });
+}
+
+// ---------- Post-game review ----------
+// Stockfish depth 18 on every position (MultiPV 3 at the student's
+// decision points, MultiPV 1 on the replies for the before/after win
+// probabilities). Moves classified on win probability; flagged moves get
+// one Claude explanation each. Everything cached with the game in memory.
+var REVIEW_SYSTEM =
+  'You explain chess to a beginner rated around 1000. Stockfish is the ' +
+  'authority on what is true — you are only translating it. Never invent a ' +
+  'move, line, or tactic that is not in the data given to you. No engine ' +
+  'numbers in your answer. Two to three sentences. Plain language.\n' +
+  'Always be clear whose piece is whose; never call an opponent’s piece "yours".';
+
+var RV_LABELS = {
+  missed:     { sym: '×',  txt: 'Missed chance', cls: 'lab-missed',  flag: true },
+  blunder:    { sym: '??', txt: 'Blunder',       cls: 'lab-blunder', flag: true },
+  mistake:    { sym: '?',  txt: 'Mistake',       cls: 'lab-mistake', flag: true },
+  inaccuracy: { sym: '?!', txt: 'Inaccuracy',    cls: 'lab-inacc',   flag: true },
+  great:      { sym: '!',  txt: 'Great',         cls: 'lab-great',   flag: true },
+  best:       { sym: '✓',  txt: 'Best',          cls: 'lab-best',    flag: false },
+  excellent:  { sym: '',   txt: 'Excellent',     cls: '',            flag: false },
+  good:       { sym: '',   txt: 'Good',          cls: '',            flag: false }
+};
+var RV_BOOK_PLIES = 10;   // moves this early count as "in book" for the Great rule
+
+var reviews = {};         // gameKey -> review object (session cache)
+var lastGameRec = null;   // snapshot of the most recently finished game
+var curReview = null;
+var rvSelected = -1;
+
+function gameKey(rec) { return rec.opp + '|' + rec.result + '|' + rec.sans.join(' '); }
+
+function createReview(rec) {
+  var g = new Chess();
+  var fens = [g.fen()];
+  var ucis = [];
+  rec.sans.forEach(function (san) {
+    var mv = g.move(san);
+    ucis.push(mv.from + mv.to + (mv.promotion || ''));
+    fens.push(g.fen());
+  });
+  return {
+    opp: rec.opp, result: rec.result, sans: rec.sans,
+    fens: fens, ucis: ucis,
+    evals: [], winW: [],
+    moves: [],            // one entry per student (White) move
+    counts: {},
+    status: 'pending', done: 0, total: fens.length - 1,
+    exDone: 0, exTotal: 0, error: null
+  };
+}
+
+// Pause the heavy analysis while a game is actually being played.
+function rvWaitIfPlaying() {
+  return new Promise(function (resolve) {
+    (function check() {
+      var playing = !$('gameScr').classList.contains('hidden') && game && !over;
+      if (!playing) resolve(); else setTimeout(check, 1500);
+    })();
+  });
+}
+
+function classifyReviewMove(m) {
+  if (m.oppGain > 20 && m.loss > 5) return 'missed';
+  if (m.isBest) {
+    if (m.ply >= RV_BOOK_PLIES && m.loss < 1 && m.secondGap >= 20) return 'great';
+    return 'best';
+  }
+  if (m.loss < 2) return 'excellent';
+  if (m.loss < 5) return 'good';
+  if (m.loss < 10) return 'inaccuracy';
+  if (m.loss < 20) return 'mistake';
+  return 'blunder';
+}
+
+function buildMoveTable(rv) {
+  rv.moves = [];
+  rv.counts = {};
+  var n = rv.fens.length - 1;
+  for (var k = 0; k < n; k += 2) {
+    var ev = rv.evals[k];
+    if (!ev || !ev.pvs[0]) continue;
+    var m = {
+      ply: k,
+      san: rv.sans[k],
+      uci: rv.ucis[k],
+      fenBefore: rv.fens[k],
+      before: rv.winW[k],
+      after: rv.winW[k + 1],
+      loss: Math.max(0, rv.winW[k] - rv.winW[k + 1]),
+      isBest: rv.ucis[k] === ev.bestmove,
+      secondGap: ev.pvs[1]
+        ? winPct(pvToCp(ev.pvs[0])) - winPct(pvToCp(ev.pvs[1]))
+        : 100,
+      oppGain: k >= 2 ? Math.max(0, rv.winW[k] - rv.winW[k - 1]) : 0,
+      oppSan: k >= 1 ? rv.sans[k - 1] : null,
+      bestSan: sanOf(rv.fens[k], ev.bestmove),
+      bestLine: sanLine(rv.fens[k], ev.pvs[0].line.split(' '), 6),
+      explanation: null, exError: null
+    };
+    m.label = classifyReviewMove(m);
+    m.flagged = RV_LABELS[m.label].flag;
+    rv.counts[m.label] = (rv.counts[m.label] || 0) + 1;
+    rv.moves.push(m);
+  }
+}
+
+function reviewPayload(m) {
+  var lines = [];
+  lines.push('You are reviewing ONE move from a finished game. The student you are ' +
+    'coaching is WHITE. Black is the opponent — Black’s pieces are never "yours" ' +
+    'or "the student’s".');
+  lines.push('Position before the move (FEN): ' + m.fenBefore);
+  lines.push(pieceOwnership(m.fenBefore));
+  lines.push('The student (White) played: ' + m.san +
+    ' — their win chance went from ' + m.before.toFixed(1) + '% to ' + m.after.toFixed(1) + '%.');
+  lines.push('Stockfish’s best move here: ' + m.bestSan + ' | main line: ' + m.bestLine);
+  if (m.label === 'missed') {
+    lines.push('IMPORTANT: Black’s previous move (' + m.oppSan + ') was a serious error that ' +
+      'raised the student’s win chance by ' + m.oppGain.toFixed(1) + ' points, and the student ' +
+      'failed to punish it. Lead with the missed punishment: what ' + m.bestSan +
+      ' would have won and how to spot chances like this.');
+  } else if (m.label === 'great') {
+    lines.push('This move WAS Stockfish’s best, and by far the only strong one. ' +
+      'Praise the find and explain in plain words why it works.');
+  } else {
+    lines.push('The move lost ground (' + RV_LABELS[m.label].txt + '). Explain in plain words ' +
+      'what it overlooks and why ' + m.bestSan + ' was better.');
+  }
+  lines.push('Reply with two to three sentences of plain coaching. No labels, no engine numbers.');
+  return lines.join('\n');
+}
+
+function runReview(rv) {
+  rv.status = 'analysing';
+  var n = rv.fens.length - 1;
+  var chain = SF.init().catch(stageErr('Stockfish didn’t load'));
+  var i;
+  for (i = 0; i < n; i++) {
+    (function (idx) {
+      chain = chain.then(rvWaitIfPlaying).then(function () {
+        return SF.analyse(rv.fens[idx], { depth: 18, multipv: idx % 2 === 0 ? 3 : 1 })
+          .catch(stageErr('Stockfish analysis failed at move ' + (Math.floor(idx / 2) + 1)));
+      }).then(function (r) {
+        rv.evals[idx] = r;
+        rv.winW[idx] = idx % 2 === 0
+          ? winPct(pvToCp(r.pvs[0]))
+          : 100 - winPct(pvToCp(r.pvs[0]));
+        rv.done++;
+        renderReviewIfVisible();
+      });
+    })(i);
+  }
+  chain.then(function () {
+    rv.winW[n] = rv.result === 'win' ? 100 : (rv.result === 'loss' ? 0 : 50);
+    buildMoveTable(rv);
+    rv.status = 'explaining';
+    renderReviewIfVisible();
+    return runExplanations(rv);
+  }).then(function () {
+    rv.status = 'done';
+    renderReviewIfVisible();
+  }).catch(function (e) {
+    rv.status = 'error';
+    rv.error = e.message;
+    renderReviewIfVisible();
+  });
+}
+
+function runExplanations(rv) {
+  var flagged = rv.moves.filter(function (m) { return m.flagged; });
+  rv.exTotal = flagged.length;
+  rv.exDone = 0;
+  if (!flagged.length) return Promise.resolve();
+  return getCoachKey().then(function (key) {
+    var chain = Promise.resolve();
+    flagged.forEach(function (m) {
+      chain = chain.then(function () {
+        return coachAsk(reviewPayload(m), key, REVIEW_SYSTEM).then(
+          function (txt) { m.explanation = txt; },
+          function (err) { m.exError = err.message; }
+        );
+      }).then(function () {
+        rv.exDone++;
+        renderReviewIfVisible();
+      });
+    });
+    return chain;
+  }, function (keyErr) {
+    flagged.forEach(function (m) { m.exError = keyErr.message; });
+  });
+}
+
+// ---------- Review screen rendering ----------
+function startReview() {
+  if (!lastGameRec || !lastGameRec.sans.length) return;
+  var key = gameKey(lastGameRec);
+  curReview = reviews[key];
+  if (!curReview) {
+    curReview = reviews[key] = createReview(lastGameRec);
+    runReview(curReview);
+  }
+  rvSelected = -1;
+  $('ladder').classList.add('hidden');
+  $('gameScr').classList.add('hidden');
+  $('card').classList.add('hidden');
+  $('reviewScr').classList.remove('hidden');
+  $('rvOpp').textContent = 'vs ' + curReview.opp;
+  renderReview();
+}
+
+function rvBackToLadder() {
+  $('reviewScr').classList.add('hidden');
+  toLadder();
+}
+
+function renderReviewIfVisible() {
+  if (!$('reviewScr').classList.contains('hidden')) renderReview();
+}
+
+function renderReview() {
+  var rv = curReview;
+  if (!rv) return;
+  var pw = $('rvProgWrap');
+  if (rv.status === 'analysing' || rv.status === 'pending') {
+    pw.classList.remove('hidden');
+    $('rvBarFill').style.width = Math.round(rv.done / rv.total * 100) + '%';
+    $('rvProgTxt').textContent = 'Analysing position ' + rv.done + ' of ' + rv.total + '…';
+  } else if (rv.status === 'explaining') {
+    pw.classList.remove('hidden');
+    $('rvBarFill').style.width = (rv.exTotal ? Math.round(rv.exDone / rv.exTotal * 100) : 100) + '%';
+    $('rvProgTxt').textContent = 'Writing explanations ' + rv.exDone + ' of ' + rv.exTotal + '…';
+  } else if (rv.status === 'error') {
+    pw.classList.remove('hidden');
+    $('rvBarFill').style.width = '0%';
+    $('rvProgTxt').textContent = rv.error;
+  } else {
+    pw.classList.add('hidden');
+  }
+  renderRvCounts(rv);
+  renderRvGraph(rv);
+  renderRvMoves(rv);
+  renderRvDetail(rv);
+}
+
+function renderRvCounts(rv) {
+  var box = $('rvCounts');
+  box.innerHTML = '';
+  if (!rv.moves.length) return;
+  Object.keys(RV_LABELS).forEach(function (label) {
+    var c = rv.counts[label];
+    if (!c) return;
+    var chip = document.createElement('span');
+    chip.className = 'rvchip ' + RV_LABELS[label].cls;
+    chip.textContent = RV_LABELS[label].txt + ' ' + (RV_LABELS[label].sym ? RV_LABELS[label].sym + ' ' : '') + '× ' + c;
+    box.appendChild(chip);
+  });
+}
+
+function renderRvGraph(rv) {
+  var n = rv.fens.length - 1;
+  if (n < 1) { $('rvGraph').innerHTML = ''; return; }
+  var pts = [];
+  for (var i = 0; i <= n; i++) {
+    if (rv.winW[i] !== undefined && rv.winW[i] !== null) {
+      pts.push((i / n * 100).toFixed(2) + ',' + (50 - rv.winW[i] / 2).toFixed(2));
+    }
+  }
+  var dots = '';
+  rv.moves.forEach(function (m) {
+    if (!m.flagged) return;
+    var x = ((m.ply + 1) / n * 100).toFixed(2);
+    var y = (50 - m.after / 2).toFixed(2);
+    dots += '<circle class="' + RV_LABELS[m.label].cls + '" cx="' + x + '" cy="' + y +
+      '" r="1.8" fill="currentColor"></circle>';
+  });
+  $('rvGraph').innerHTML =
+    '<svg viewBox="0 0 100 50" preserveAspectRatio="none">' +
+    '<line x1="0" y1="25" x2="100" y2="25" stroke="currentColor" stroke-opacity="0.25" ' +
+    'stroke-width="0.4" stroke-dasharray="2 2"></line>' +
+    (pts.length > 1
+      ? '<polyline points="' + pts.join(' ') + '" fill="none" stroke="var(--brass)" ' +
+        'stroke-width="0.9" vector-effect="non-scaling-stroke"></polyline>'
+      : '') +
+    dots + '</svg>';
+}
+
+function renderRvMoves(rv) {
+  var box = $('rvMoves');
+  box.innerHTML = '';
+  var n = rv.sans.length;
+  for (var k = 0; k < n; k += 2) {
+    var num = document.createElement('span');
+    num.className = 'rvnum';
+    num.textContent = (k / 2 + 1) + '.';
+    box.appendChild(num);
+
+    var m = null;
+    for (var j = 0; j < rv.moves.length; j++) if (rv.moves[j].ply === k) { m = rv.moves[j]; break; }
+    var w;
+    if (m && m.flagged) {
+      w = document.createElement('button');
+      w.setAttribute('data-ply', k);
+    } else {
+      w = document.createElement('span');
+    }
+    w.className = 'rvmv' + (m ? ' ' + RV_LABELS[m.label].cls + (m.flagged ? ' flag' : '') : '') +
+      (rvSelected === k ? ' sel' : '');
+    w.textContent = rv.sans[k] + (m && RV_LABELS[m.label].sym ? ' ' + RV_LABELS[m.label].sym : '');
+    box.appendChild(w);
+
+    var b = document.createElement('span');
+    b.className = 'rvmv';
+    b.textContent = k + 1 < n ? rv.sans[k + 1] : '';
+    box.appendChild(b);
+  }
+}
+
+function renderRvMini(fen, uci) {
+  var box = $('rvMini');
+  box.innerHTML = '';
+  var hl = uci ? [uci.slice(0, 2), uci.slice(2, 4)] : [];
+  var placement = fen.split(' ')[0].split('/');
+  for (var row = 0; row < 8; row++) {          // row 0 = rank 8, top
+    var file = 0;
+    for (var i = 0; i < placement[row].length; i++) {
+      var ch = placement[row].charAt(i);
+      if (!isNaN(parseInt(ch, 10))) { file += parseInt(ch, 10); continue; }
+      var pc = document.createElement('div');
+      pc.className = 'piece ' + (ch === ch.toUpperCase() ? 'w' : 'b');
+      pc.style.left = (file * 12.5) + '%';
+      pc.style.top = (row * 12.5) + '%';
+      pc.innerHTML = '<span>' + GLYPH[ch.toLowerCase()] + '</span>';
+      box.appendChild(pc);
+      file++;
+    }
+  }
+  for (var f = 0; f < 8; f++) {
+    for (var r = 0; r < 8; r++) {
+      var sq = document.createElement('div');
+      var name = FILES[f] + (8 - r);
+      sq.className = 'rvsq ' + ((f + r) % 2 === 0 ? 'l' : 'd') +
+        (hl.indexOf(name) !== -1 ? ' hl' : '');
+      sq.style.left = (f * 12.5) + '%';
+      sq.style.top = (r * 12.5) + '%';
+      box.insertBefore(sq, box.firstChild);   // squares under pieces
+    }
+  }
+}
+
+function renderRvDetail(rv) {
+  var det = $('rvDetail');
+  if (rvSelected < 0) { det.classList.add('hidden'); return; }
+  var m = null;
+  for (var j = 0; j < rv.moves.length; j++) if (rv.moves[j].ply === rvSelected) { m = rv.moves[j]; break; }
+  if (!m) { det.classList.add('hidden'); return; }
+  det.classList.remove('hidden');
+  renderRvMini(m.fenBefore, m.uci);
+  var head = 'You played ' + m.san +
+    (RV_LABELS[m.label].sym ? ' ' + RV_LABELS[m.label].sym : '') +
+    ' (' + RV_LABELS[m.label].txt + '). Best: ' + m.bestSan + '.';
+  var body;
+  if (m.explanation) body = m.explanation;
+  else if (m.exError) body = '(No explanation — ' + m.exError + ')';
+  else body = rv.status === 'done' ? '' : '(Writing explanation…)';
+  $('rvExplain').innerHTML =
+    '<span class="' + RV_LABELS[m.label].cls + '">' + escapeHtml(head) + '</span>\n' +
+    escapeHtml(body);
 }
 
 function useTakeback() {
@@ -1138,6 +1576,11 @@ function startGame(o, idx) {
 
 function endGame() {
   over = true;
+  lastGameRec = {
+    sans: game.history(),
+    opp: opp.name,
+    result: game.in_checkmate() ? (game.turn() === 'b' ? 'win' : 'loss') : 'draw'
+  };
   var title, msg;
   if (game.in_checkmate()) {
     var playerWon = game.turn() === 'b';
@@ -1170,7 +1613,10 @@ function toLadder() {
   aiMoveSeq++;
   $('gameScr').classList.add('hidden');
   $('card').classList.add('hidden');
+  $('reviewScr').classList.add('hidden');
   $('ladder').classList.remove('hidden');
+  $('lastReviewBtn').classList.toggle('hidden', !lastGameRec);
+  $('lastReviewOpp').textContent = lastGameRec ? 'vs ' + lastGameRec.opp : '';
   renderLadder();
 }
 
@@ -1188,6 +1634,15 @@ $('ladderBtn').onclick = toLadder;
 $('rematchBtn').onclick = function () { startGame(opp, oppIndex); };
 $('coachBtn').onclick = useCoach;
 $('tbBtn').onclick = useTakeback;
+$('reviewBtn').onclick = startReview;
+$('lastReviewBtn').onclick = startReview;
+$('rvBack').onclick = rvBackToLadder;
+$('rvMoves').addEventListener('click', function (e) {
+  var t = e.target.closest ? e.target.closest('[data-ply]') : null;
+  if (!t) return;
+  rvSelected = parseInt(t.getAttribute('data-ply'), 10);
+  renderReview();
+});
 </script>
 </body>
 </html>
