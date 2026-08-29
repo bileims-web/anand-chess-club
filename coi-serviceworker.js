@@ -1,5 +1,33 @@
 /*! coi-serviceworker v0.1.7 - Guido Zuidhof and contributors, licensed under MIT */
 let coepCredentialless = false;
+
+/* anand-chess-club addition: keep the large, immutable engine binaries in
+   Cache Storage. GitHub Pages serves everything with max-age=600, which made
+   every visit re-download ~19MB of WASM runtimes on mobile data. Served
+   cache-first with a background refresh; same-origin only. */
+if (typeof window === 'undefined') {
+    const ASSET_CACHE = "acc-assets-v1";
+    const cacheable = (url) =>
+        url.origin === self.location.origin &&
+        (url.pathname.includes("/ort/") ||
+         url.pathname.includes("/engine/") ||
+         url.pathname.endsWith("/pieces.js"));
+
+    self.addEventListener("fetch", (event) => {
+        const url = new URL(event.request.url);
+        if (event.request.method !== "GET" || !cacheable(url)) return;
+        event.respondWith((async () => {
+            const cache = await caches.open(ASSET_CACHE);
+            const hit = await cache.match(event.request);
+            const refresh = fetch(event.request).then((resp) => {
+                if (resp && resp.ok) cache.put(event.request, resp.clone());
+                return resp;
+            }).catch(() => hit);
+            if (hit) { event.waitUntil(refresh.catch(() => {})); return hit; }
+            return refresh;
+        })());
+    });
+}
 if (typeof window === 'undefined') {
     self.addEventListener("install", () => self.skipWaiting());
     self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
