@@ -29,8 +29,14 @@ importScripts('https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.
 importScripts('ort/ort.wasm.min.js');
 
 ort.env.wasm.wasmPaths = new URL('ort/', self.location.href).href;
+// WebKit (Safari, and every iPhone/iPad browser) deadlocks spawning the
+// pthread pool from inside a worker: InferenceSession.create never returns
+// and the opponent "thinks" forever. Single-thread there, like Anand's net.
+var UA = (self.navigator && self.navigator.userAgent) || '';
+var WEBKIT_ONLY = /iPhone|iPad|iPod|CriOS|FxiOS/.test(UA) ||
+  (/AppleWebKit/.test(UA) && !/Chrome\/|Chromium\//.test(UA));
 ort.env.wasm.numThreads =
-  typeof SharedArrayBuffer !== 'undefined' && self.crossOriginIsolated === true
+  !WEBKIT_ONLY && typeof SharedArrayBuffer !== 'undefined' && self.crossOriginIsolated === true
     ? Math.max(1, Math.min(((self.navigator && navigator.hardwareConcurrency) || 2) - 1, 4))
     : 1;
 
@@ -228,6 +234,7 @@ function processOutputs(fen, logitsMove, logitsValue, legalMoves) {
 var session = null;
 var modelUrl = null;
 var modelVersion = null;
+var downloading = false;
 
 function initSession(buffer) {
   return ort.InferenceSession.create(buffer).then(function (s) { session = s; });
@@ -272,6 +279,8 @@ self.onmessage = function (e) {
     }
 
     if (msg.type === 'download') {
+      if (downloading) return;   // a retry while one is in flight must not start a second fetch
+      downloading = true;
       postMessage({ type: 'status', status: 'downloading' });
       postMessage({ type: 'progress', progress: 0 });
       return fetch(modelUrl).then(function (response) {
@@ -295,7 +304,8 @@ self.onmessage = function (e) {
             chunks.push(r.value);
             received += r.value.length;
             if (contentLength > 0) {
-              var progress = Math.floor((received / contentLength) * 100);
+              // the server reports the compressed size, so cap what we show
+              var progress = Math.min(99, Math.floor((received / contentLength) * 100));
               if (progress >= lastReported + 5) {
                 postMessage({ type: 'progress', progress: progress });
                 lastReported = progress;
@@ -314,6 +324,9 @@ self.onmessage = function (e) {
       }).then(function () {
         postMessage({ type: 'progress', progress: 100 });
         postMessage({ type: 'status', status: 'ready' });
+      }).catch(function (err) {
+        downloading = false;   // a fresh 'download' may try again
+        throw err;
       });
     }
 
