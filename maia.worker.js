@@ -29,16 +29,12 @@ importScripts('https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.
 importScripts('ort/ort.wasm.min.js');
 
 ort.env.wasm.wasmPaths = new URL('ort/', self.location.href).href;
-// WebKit (Safari, and every iPhone/iPad browser) deadlocks spawning the
-// pthread pool from inside a worker: InferenceSession.create never returns
-// and the opponent "thinks" forever. Single-thread there, like Anand's net.
-var UA = (self.navigator && self.navigator.userAgent) || '';
-var WEBKIT_ONLY = /iPhone|iPad|iPod|CriOS|FxiOS/.test(UA) ||
-  (/AppleWebKit/.test(UA) && !/Chrome\/|Chromium\//.test(UA));
-ort.env.wasm.numThreads =
-  !WEBKIT_ONLY && typeof SharedArrayBuffer !== 'undefined' && self.crossOriginIsolated === true
-    ? Math.max(1, Math.min(((self.navigator && navigator.hardwareConcurrency) || 2) - 1, 4))
-    : 1;
+// One inference per move needs no thread pool — and spawning one from
+// inside a worker wedges real phones (seen on Android Chrome, known on
+// iPhone WebKit): InferenceSession.create never returns, the opponent
+// "thinks" forever. One thread, like Anand's net: ~330ms per eval,
+// indistinguishable at the board.
+ort.env.wasm.numThreads = 1;
 
 // ---------- IndexedDB model cache ----------
 var DB_NAME = 'MaiaModels';
