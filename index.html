@@ -101,6 +101,7 @@
   .av { width: 38px; height: 38px; border-radius: 50%; flex: none; overflow: hidden; display: block; }
   .av img, .av svg { width: 100%; height: 100%; display: block; object-fit: cover; }
   .av-sm { width: 28px; height: 28px; }
+  .av-boss { box-shadow: 0 0 0 1.5px var(--brass); }
   .row .nm { flex: 1; font-size: 16px; }
   .row .rt { font-size: 13px; color: color-mix(in srgb, var(--pw) 55%, transparent); font-variant-numeric: tabular-nums; }
   .row .st { font-size: 13px; }
@@ -549,7 +550,7 @@ var LEVELS = [
   { name: 'Prize Winner',    rating: 1600 },
   { name: 'The Champion',    rating: 1900 }
 ];
-var MEAN_GIRL = { name: 'Anand', rating: 2400, offLadder: true };
+var MEAN_GIRL = { name: 'Anand', rating: 2400, offLadder: true, avatarKind: 'disguise' };
 var GLYPH = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
 var PIECE_CHOICES = [
   { id: 'classic',  name: 'Classic' },
@@ -601,9 +602,13 @@ var coachLeft = 3, tbLeft = 3, pipTotal = 3;
 // 7 from 1600 up (which includes Anand).
 // An opponent's picture. `url` is set once real artwork exists; until then a
 // neutral figure on a disc that warms as the ladder gets harder.
-function avatarHtml(rating, url, small) {
+var DISGUISE_SVG = '<svg viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="20" fill="#2A2F37"/><path d="M4.5 40c1.1-7.6 7.2-11.4 15.5-11.4S34.4 32.4 35.5 40z" fill="#171B21"/><path d="M20 28.8l-5.2 2.1L17.4 40h5.2l2.6-9.1z" fill="#20262E"/><path d="M20 28.8l2.1 3.4-2.1 2.6-2.1-2.6z" fill="#C08A3E" opacity=".75"/><path d="M14.8 30.9l-2.6 5.4 3.9-1.6z" fill="#2A313A"/><path d="M25.2 30.9l2.6 5.4-3.9-1.6z" fill="#2A313A"/><ellipse cx="20" cy="21.9" rx="6.5" ry="7.4" fill="#BE8A5E"/><path d="M13.5 21c0-4.4 2.9-7.1 6.5-7.1s6.5 2.7 6.5 7.1z" fill="#000" opacity=".18"/><path d="M12.9 15.1V10c0-2.8 3.1-4.6 7.1-4.6s7.1 1.8 7.1 4.6v5.1z" fill="#0D1014"/><path d="M13.6 8.6c.9-1.7 3.4-2.6 6.4-2.6s5.5.9 6.4 2.6c-1.5-1.1-3.8-1.7-6.4-1.7s-4.9.6-6.4 1.7z" fill="#39414C"/><rect x="12.9" y="12.1" width="14.2" height="2.6" fill="#C08A3E" opacity=".85"/><ellipse cx="20" cy="15.2" rx="13.1" ry="3.1" fill="#0D1014"/><path d="M6.9 15.2c0-1.2 5.9-2.2 13.1-2.2s13.1 1 13.1 2.2c0-1.7-5.9-3.1-13.1-3.1S6.9 13.5 6.9 15.2z" fill="#39414C" opacity=".55"/><rect x="12.2" y="18.4" width="6.6" height="4.8" rx="1.8" fill="#05070A"/><rect x="21.2" y="18.4" width="6.6" height="4.8" rx="1.8" fill="#05070A"/><rect x="18.5" y="20" width="3" height="1.2" rx=".6" fill="#05070A"/><path d="M13.2 19.6h2.1l-2.6 3z" fill="#FFFFFF" opacity=".33"/><path d="M22.2 19.6h2.1l-2.6 3z" fill="#FFFFFF" opacity=".33"/></svg>';
+
+function avatarHtml(rating, url, small, kind) {
   var cls = 'av' + (small ? ' av-sm' : '');
   if (url) return '<span class="' + cls + '"><img src="' + url + '" alt=""></span>';
+  // The club's uninvited visitor: hat, dark glasses, collar up.
+  if (kind === 'disguise') return '<span class="' + cls + ' av-boss">' + DISGUISE_SVG + '</span>';
   var t = Math.max(0, Math.min(1, (rating - 700) / 1200));
   var hue = Math.round(205 - t * 165);
   return '<span class="' + cls + '" style="background:hsl(' + hue + ',26%,34%)">' +
@@ -627,7 +632,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.15';
+var BUILD = '2026-08-29.16';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -825,7 +830,7 @@ function renderLadder() {
   box.appendChild(div);
   var mg = document.createElement('button');
   mg.className = 'row mg';
-  mg.innerHTML = avatarHtml(MEAN_GIRL.rating, MEAN_GIRL.avatar) +
+  mg.innerHTML = avatarHtml(MEAN_GIRL.rating, MEAN_GIRL.avatar, false, MEAN_GIRL.avatarKind) +
                  '<span class="nm">' + MEAN_GIRL.name + '</span>' +
                  '<span class="rt">' + MEAN_GIRL.rating + '</span><span class="st"></span>';
   mg.onclick = function () { openStartDialog(MEAN_GIRL, -1); };
@@ -2105,7 +2110,8 @@ function renderHistory() {
       ? rec.analysis.filter(function (m) { return m.flagged; }).length
       : 0;
     b.innerHTML =
-      avatarHtml(rec.oppRating || 1000, rec.avatar, true) +
+      avatarHtml(rec.oppRating || 1000, rec.avatar, true,
+                 rec.oppIndex === -1 ? 'disguise' : null) +
       '<span class="hnm">' + escapeHtml(rec.opp) +
       '<span class="hsub">' + (rec.color === 'w' ? 'White' : 'Black') + ' · ' +
       moves + ' moves · ' + fmtWhen(rec.ts) +
@@ -2693,7 +2699,7 @@ function startGame(o, idx, resume) {
     if (game.history().length === 0 && !over) setStatus(openingStatus());
     other.init(function () {}, function () {}).catch(function () {});
   }).catch(function () {});
-  $('oppAv').innerHTML = avatarHtml(o.rating, o.avatar, true);
+  $('oppAv').innerHTML = avatarHtml(o.rating, o.avatar, true, o.avatarKind);
   $('oppName').textContent = o.name;
   $('oppRt').textContent = o.rating;
   $('ladder').classList.add('hidden');
