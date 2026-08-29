@@ -227,6 +227,25 @@
     color: color-mix(in srgb, var(--pw) 45%, transparent);
   }
   .tiertoggle button.on { border-color: var(--brass); color: var(--brass); }
+  .rvplay { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 6px 0 8px; }
+  .rvplay button {
+    font-size: 15px; padding: 4px 12px; border-radius: 8px; line-height: 1.4;
+    border: 1px solid color-mix(in srgb, var(--pw) 18%, transparent);
+    color: color-mix(in srgb, var(--pw) 70%, transparent);
+  }
+  .rvplay button:disabled { opacity: .3; }
+  #rvPlyTxt { font-size: 12px; min-width: 62px; text-align: left;
+    color: color-mix(in srgb, var(--pw) 45%, transparent); font-variant-numeric: tabular-nums; }
+  #histList { max-width: 520px; margin: 0 auto; padding: 8px 16px 32px; }
+  .hrow { display: flex; align-items: center; gap: 10px; width: 100%;
+    padding: 11px 14px; margin-bottom: 8px; border-radius: 10px; text-align: left;
+    border: 1.5px solid color-mix(in srgb, var(--pw) 12%, transparent);
+    background: color-mix(in srgb, var(--pw) 4%, transparent); }
+  .hrow .hnm { flex: 1; font-size: 15px; }
+  .hrow .hsub { display: block; font-size: 12px; margin-top: 2px;
+    color: color-mix(in srgb, var(--pw) 45%, transparent); }
+  .hrow .hres { font-size: 13px; font-weight: 600; }
+  .hres.win { color: #55B85F; } .hres.loss { color: #D9534F; } .hres.draw { color: var(--brass); }
   .rvtoggle { display: flex; align-items: center; gap: 8px; justify-content: center; margin: 2px 0 8px; }
   .tiers { margin: 26px 0 0; }
   .tierrow { display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 8px; }
@@ -257,8 +276,8 @@
   <button class="row hidden" id="resumeBtn">
     <span class="nm">Resume game</span><span class="rt" id="resumeOpp"></span>
   </button>
-  <button class="row hidden" id="lastReviewBtn">
-    <span class="nm">Review last game</span><span class="rt" id="lastReviewOpp"></span>
+  <button class="row" id="historyBtn">
+    <span class="nm">Past Games</span><span class="rt" id="historyCount"></span>
   </button>
   <p class="spend" id="ladderSpend"></p>
   <p class="spend" id="buildTag"></p>
@@ -290,6 +309,16 @@
   <div id="status"></div>
 </section>
 
+<section id="histScr" class="hidden">
+  <div class="topbar">
+    <button id="histBack" aria-label="Back to ladder">&#8249;</button>
+    <div class="who"><span class="nm">Past Games</span></div>
+    <div class="sp"></div>
+  </div>
+  <div id="histList"></div>
+  <p class="spend" id="histEmpty"></p>
+</section>
+
 <section id="reviewScr" class="hidden">
   <div class="topbar">
     <button id="rvBack" aria-label="Back to ladder">&#8249;</button>
@@ -303,8 +332,15 @@
     </div>
     <div class="rvcounts" id="rvCounts"></div>
     <div id="rvGraph"></div>
-    <div id="rvDetail" class="hidden">
+    <div id="rvDetail">
       <div id="rvMini"></div>
+      <div class="rvplay">
+        <button id="rvStart" aria-label="First move">&#124;&#9664;</button>
+        <button id="rvPrev" aria-label="Previous move">&#9664;</button>
+        <button id="rvPlay" aria-label="Play">&#9654;</button>
+        <button id="rvNext" aria-label="Next move">&#9654;&#124;</button>
+        <span id="rvPlyTxt"></span>
+      </div>
       <div class="rvtoggle">
         <span class="tierlab">Explained by</span>
         <span class="tiertoggle" id="rvTierToggle"></span>
@@ -391,7 +427,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.3';
+var BUILD = '2026-08-29.4';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -502,6 +538,8 @@ function loadState() {
     }
   }).catch(function () {}).then(function () {
     return loadGame();
+  }).then(function () {
+    return idbGetGames().then(function (g) { gameHistory = g; }).catch(function () {});
   }).then(function () {
     stateLoaded = true;
     renderThemes();
@@ -1000,6 +1038,28 @@ function idbPut(obj) {
     });
   });
 }
+// All finished games, newest first. Ids are prefixed so they never collide
+// with the models, the key, or the game in progress.
+function idbGetGames() {
+  return idbOpen().then(function (db) {
+    return new Promise(function (resolve, reject) {
+      var out = [];
+      var req = db.transaction(['models'], 'readonly').objectStore('models').openCursor();
+      req.onsuccess = function () {
+        var c = req.result;
+        if (!c) {
+          out.sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });
+          resolve(out);
+          return;
+        }
+        if (typeof c.key === 'string' && c.key.indexOf('game-') === 0) out.push(c.value);
+        c.continue();
+      };
+      req.onerror = function () { reject(req.error); };
+    });
+  });
+}
+
 function idbDelete(id) {
   return idbOpen().then(function (db) {
     return new Promise(function (resolve, reject) {
@@ -1301,10 +1361,10 @@ var RV_LABELS = {
 };
 var RV_BOOK_PLIES = 10;   // moves this early count as "in book" for the Great rule
 
+var gameHistory = [];     // finished games, newest first (window.history is taken)
 var reviews = {};         // gameKey -> review object (session cache)
 var lastGameRec = null;   // snapshot of the most recently finished game
 var curReview = null;
-var rvSelected = -1;
 
 function gameKey(rec) {
   return rec.opp + '|' + (rec.color || 'w') + '|' + rec.result + '|' + rec.sans.join(' ');
@@ -1323,6 +1383,7 @@ function createReview(rec) {
     opp: rec.opp, result: rec.result, sans: rec.sans,
     fens: fens, ucis: ucis,
     color: rec.color || 'w',   // the side the student played
+    histId: rec.id || null,
     evals: [], win: [],        // win[] is the STUDENT's win probability
     moves: [],                 // one entry per student move
     counts: {},
@@ -1441,6 +1502,7 @@ function runReview(rv) {
   chain.then(function () {
     rv.win[n] = rv.result === 'win' ? 100 : (rv.result === 'loss' ? 0 : 50);
     buildMoveTable(rv);
+    persistReview(rv);
     rv.status = 'explaining';
     rv.exBusy = true;
     renderReviewIfVisible();
@@ -1455,6 +1517,28 @@ function runReview(rv) {
     rv.error = e.message;
     renderReviewIfVisible();
   });
+}
+
+// Fold the finished analysis back into the stored game. Only what is needed
+// to redraw it later: no engine lines beyond the ones already shown.
+function persistReview(rv) {
+  if (!rv || !rv.histId) return;
+  var rec = null;
+  for (var i = 0; i < gameHistory.length; i++) {
+    if (gameHistory[i].id === rv.histId) { rec = gameHistory[i]; break; }
+  }
+  if (!rec) return;
+  rec.win = rv.win;
+  rec.counts = rv.counts;
+  rec.analysis = rv.moves.map(function (m) {
+    return {
+      ply: m.ply, san: m.san, uci: m.uci, label: m.label, flagged: m.flagged,
+      before: m.before, after: m.after, loss: m.loss,
+      bestSan: m.bestSan, bestLine: m.bestLine, oppSan: m.oppSan, oppGain: m.oppGain,
+      explanations: m.explanations, exErrors: m.exErrors
+    };
+  });
+  idbPut(rec).catch(function () {});
 }
 
 // Called when the review tier changes, or the screen is opened: fills in
@@ -1498,6 +1582,7 @@ function runExplanations(rv) {
         );
       }).then(function () {
         rv.exDone++;
+        persistReview(rv);
         renderReviewIfVisible();
       });
     });
@@ -1507,26 +1592,132 @@ function runExplanations(rv) {
   });
 }
 
-// ---------- Review screen rendering ----------
-function startReview() {
-  if (!lastGameRec || !lastGameRec.sans.length) return;
-  var key = gameKey(lastGameRec);
-  curReview = reviews[key];
-  if (!curReview) {
-    curReview = reviews[key] = createReview(lastGameRec);
-    runReview(curReview);
-  }
-  rvSelected = -1;
+// ---------- Past games ----------
+function fmtWhen(ts) {
+  if (!ts) return '';
+  var d = new Date(ts);
+  var day = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()];
+  var hh = d.getHours(), mm = ('0' + d.getMinutes()).slice(-2);
+  var ap = hh >= 12 ? 'pm' : 'am';
+  hh = hh % 12; if (!hh) hh = 12;
+  return day + ' ' + d.getDate() + '/' + (d.getMonth() + 1) + ', ' + hh + ':' + mm + ap;
+}
+
+function resultWord(rec) {
+  if (rec.result === 'win') return 'Won';
+  if (rec.result === 'loss') return 'Lost';
+  return 'Drew';
+}
+
+function openHistory() {
   $('ladder').classList.add('hidden');
+  $('gameScr').classList.add('hidden');
+  $('reviewScr').classList.add('hidden');
+  $('card').classList.add('hidden');
+  $('histScr').classList.remove('hidden');
+  renderHistory();
+}
+
+function renderHistory() {
+  var box = $('histList');
+  box.innerHTML = '';
+  $('histEmpty').textContent = gameHistory.length
+    ? '' : 'No finished games yet. Play one and it will be kept here.';
+  gameHistory.forEach(function (rec) {
+    var b = document.createElement('button');
+    b.className = 'hrow';
+    var moves = Math.ceil(rec.sans.length / 2);
+    var analysed = rec.analysis && rec.analysis.length;
+    var flags = analysed
+      ? rec.analysis.filter(function (m) { return m.flagged; }).length
+      : 0;
+    b.innerHTML =
+      '<span class="hnm">' + escapeHtml(rec.opp) +
+      '<span class="hsub">' + (rec.color === 'w' ? 'White' : 'Black') + ' · ' +
+      moves + ' moves · ' + fmtWhen(rec.ts) +
+      (analysed ? ' · ' + flags + ' to learn from' : ' · not analysed yet') +
+      '</span></span>' +
+      '<span class="hres ' + rec.result + '">' + resultWord(rec) + '</span>' +
+      '<span class="hres">&#9654;</span>';
+    b.onclick = function () { openStoredGame(rec); };
+    box.appendChild(b);
+  });
+}
+
+// Rebuild a review object from a stored game. If it was analysed, the
+// analysis comes back with it and Stockfish is never re-run.
+function openStoredGame(rec) {
+  var key = gameKey(rec);
+  var rv = reviews[key];
+  if (!rv) {
+    rv = createReview(rec);
+    if (rec.analysis && rec.analysis.length) {
+      rv.win = rec.win || [];
+      rv.counts = rec.counts || {};
+      rv.moves = rec.analysis.map(function (m) {
+        var o = {};
+        for (var k in m) if (Object.prototype.hasOwnProperty.call(m, k)) o[k] = m[k];
+        o.fenBefore = rv.fens[m.ply];
+        o.explanations = m.explanations || {};
+        o.exErrors = m.exErrors || {};
+        return o;
+      });
+      rv.status = 'done';
+      rv.done = rv.total;
+    }
+    reviews[key] = rv;
+  }
+  curReview = rv;
+  rvPly = rv.fens.length - 1;
+  stopPlayback();
+  $('ladder').classList.add('hidden');
+  $('histScr').classList.add('hidden');
   $('gameScr').classList.add('hidden');
   $('card').classList.add('hidden');
   $('reviewScr').classList.remove('hidden');
-  $('rvOpp').textContent = 'vs ' + curReview.opp;
+  $('rvOpp').textContent = 'vs ' + rv.opp;
   renderReview();
-  ensureExplanations();   // fills in the tier if it changed since last time
+  if (rv.status === 'pending') runReview(rv);   // never analysed: do it now
+  else ensureExplanations();
+}
+
+// ---------- Replay ----------
+var rvPly = 0;
+var rvPlayTimer = null;
+
+function stopPlayback() {
+  if (rvPlayTimer) { clearInterval(rvPlayTimer); rvPlayTimer = null; }
+  var b = $('rvPlay');
+  if (b) b.innerHTML = '&#9654;';
+}
+
+function togglePlayback() {
+  if (rvPlayTimer) { stopPlayback(); return; }
+  if (!curReview) return;
+  if (rvPly >= curReview.fens.length - 1) rvPly = 0;
+  $('rvPlay').innerHTML = '&#10073;&#10073;';
+  rvPlayTimer = setInterval(function () {
+    if (!curReview || rvPly >= curReview.fens.length - 1) { stopPlayback(); return; }
+    rvPly++;
+    renderReview();
+  }, 900);
+}
+
+function stepPly(delta) {
+  if (!curReview) return;
+  stopPlayback();
+  rvPly = Math.max(0, Math.min(curReview.fens.length - 1, rvPly + delta));
+  renderReview();
+}
+
+// ---------- Review screen rendering ----------
+function startReview() {
+  if (!lastGameRec || !lastGameRec.sans.length) return;
+  openStoredGame(lastGameRec);
 }
 
 function rvBackToLadder() {
+  stopPlayback();
   $('reviewScr').classList.add('hidden');
   toLadder();
 }
@@ -1628,14 +1819,10 @@ function renderRvMoves(rv) {
       }
       var m = null;
       for (var j = 0; j < rv.moves.length; j++) if (rv.moves[j].ply === ply) { m = rv.moves[j]; break; }
-      if (m && m.flagged) {
-        cell = document.createElement('button');
-        cell.setAttribute('data-ply', ply);
-      } else {
-        cell = document.createElement('span');
-      }
+      cell = document.createElement('button');
+      cell.setAttribute('data-ply', ply);
       cell.className = 'rvmv' + (m ? ' ' + RV_LABELS[m.label].cls + (m.flagged ? ' flag' : '') : '') +
-        (rvSelected === ply ? ' sel' : '');
+        (rvPly === ply + 1 ? ' sel' : '');
       cell.textContent = rv.sans[ply] + (m && RV_LABELS[m.label].sym ? ' ' + RV_LABELS[m.label].sym : '');
       box.appendChild(cell);
     });
@@ -1676,23 +1863,40 @@ function renderRvMini(fen, uci, flip) {
 }
 
 function renderRvDetail(rv) {
-  var det = $('rvDetail');
-  if (rvSelected < 0) { det.classList.add('hidden'); return; }
+  var n = rv.fens.length - 1;
+  if (rvPly > n) rvPly = n;
+  if (rvPly < 0) rvPly = 0;
+
+  // the move that produced the position on screen
+  var lastUci = rvPly > 0 ? rv.ucis[rvPly - 1] : null;
+  renderRvMini(rv.fens[rvPly], lastUci, rv.color === 'b');
+
+  $('rvPlyTxt').textContent = rvPly === 0
+    ? 'start'
+    : 'move ' + Math.ceil(rvPly / 2) + ' of ' + Math.ceil(n / 2);
+  $('rvStart').disabled = rvPly === 0;
+  $('rvPrev').disabled = rvPly === 0;
+  $('rvNext').disabled = rvPly >= n;
+
+  // commentary belongs to the move just played, when it was one of yours
   var m = null;
-  for (var j = 0; j < rv.moves.length; j++) if (rv.moves[j].ply === rvSelected) { m = rv.moves[j]; break; }
-  if (!m) { det.classList.add('hidden'); return; }
-  det.classList.remove('hidden');
-  renderRvMini(m.fenBefore, m.uci, rv.color === 'b');
+  for (var j = 0; j < rv.moves.length; j++) {
+    if (rv.moves[j].ply === rvPly - 1) { m = rv.moves[j]; break; }
+  }
+  if (!m) { $('rvExplain').textContent = ''; return; }
+
   var head = 'You played ' + m.san +
     (RV_LABELS[m.label].sym ? ' ' + RV_LABELS[m.label].sym : '') +
     ' (' + RV_LABELS[m.label].txt + '). Best: ' + m.bestSan + '.';
-  var body;
-  if (m.explanations[reviewTier]) body = 'GM Anand: ' + m.explanations[reviewTier];
-  else if (m.exErrors[reviewTier]) body = '(No explanation — ' + m.exErrors[reviewTier] + ')';
-  else body = rv.status === 'done' ? '' : '(GM Anand is writing…)';
+  var body = '';
+  if (m.flagged) {
+    if (m.explanations[reviewTier]) body = 'GM Anand: ' + m.explanations[reviewTier];
+    else if (m.exErrors[reviewTier]) body = '(No explanation — ' + m.exErrors[reviewTier] + ')';
+    else body = rv.status === 'done' ? '' : '(GM Anand is writing…)';
+  }
   $('rvExplain').innerHTML =
-    '<span class="' + RV_LABELS[m.label].cls + '">' + escapeHtml(head) + '</span>\n' +
-    escapeHtml(body).replace(/^(GM Anand:)/, '<span class="voice">$1</span>');
+    '<span class="' + RV_LABELS[m.label].cls + '">' + escapeHtml(head) + '</span>' +
+    (body ? '\n' + escapeHtml(body).replace(/^(GM Anand:)/, '<span class="voice">$1</span>') : '');
 }
 
 // ---------- Resign, draw offers, and his resignation ----------
@@ -2090,11 +2294,20 @@ function endGame(reason) {
   else result = 'draw';
 
   lastGameRec = {
+    id: 'game-' + Date.now(),
+    ts: Date.now(),
     sans: game.history(),
     opp: opp.name,
+    oppRating: opp.rating,
+    oppIndex: oppIndex,
     result: result,
+    reason: reason || 'played out',
     color: playerColor
   };
+  if (lastGameRec.sans.length) {
+    gameHistory.unshift(lastGameRec);
+    idbPut(lastGameRec).catch(function () {});
+  }
 
   var title, msg;
   if (reason === 'resign-player') title = 'You resigned';
@@ -2138,11 +2351,12 @@ function toLadder() {
   $('gameScr').classList.add('hidden');
   $('card').classList.add('hidden');
   $('reviewScr').classList.add('hidden');
+  $('histScr').classList.add('hidden');
   $('ladder').classList.remove('hidden');
   $('resumeBtn').classList.toggle('hidden', !pendingGame);
   $('resumeOpp').textContent = pendingGame ? 'vs ' + pendingGame.oppName : '';
-  $('lastReviewBtn').classList.toggle('hidden', !lastGameRec);
-  $('lastReviewOpp').textContent = lastGameRec ? 'vs ' + lastGameRec.opp : '';
+  $('historyCount').textContent = gameHistory.length
+    ? gameHistory.length + (gameHistory.length === 1 ? ' game' : ' games') : '';
   renderSpend();
   renderLadder();
 }
@@ -2173,12 +2387,18 @@ $('startCancel').onclick = closeStartDialog;
 $('resignBtn').onclick = playerResign;
 $('drawBtn').onclick = playerOfferDraw;
 $('reviewBtn').onclick = startReview;
-$('lastReviewBtn').onclick = startReview;
 $('rvBack').onclick = rvBackToLadder;
+$('histBack').onclick = function () { $('histScr').classList.add('hidden'); toLadder(); };
+$('historyBtn').onclick = openHistory;
+$('rvStart').onclick = function () { stopPlayback(); rvPly = 0; renderReview(); };
+$('rvPrev').onclick = function () { stepPly(-1); };
+$('rvNext').onclick = function () { stepPly(1); };
+$('rvPlay').onclick = togglePlayback;
 $('rvMoves').addEventListener('click', function (e) {
   var t = e.target.closest ? e.target.closest('[data-ply]') : null;
   if (!t) return;
-  rvSelected = parseInt(t.getAttribute('data-ply'), 10);
+  stopPlayback();
+  rvPly = parseInt(t.getAttribute('data-ply'), 10) + 1;
   renderReview();
 });
 </script>
