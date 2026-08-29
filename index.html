@@ -431,8 +431,8 @@ function tryPlayerMove(from, to) {
 // human-like play). Variety comes from temperature + nucleus (top-p)
 // sampling over the policy, applied to the whole game, mirroring the
 // Temperature/TopP controls of the Maia 3 UCI engine.
-var MAIA_TEMPERATURE = 0.5;  // 0 = argmax; low keeps quality, adds variety
-var MAIA_TOP_P = 0.95;       // drop the long tail of rare blunders
+var MAIA_TEMPERATURE = 1.0;  // 1 = sample the human move distribution as-is; 0 = argmax
+var MAIA_TOP_P = 1.0;        // 1 = disabled (no tail cut)
 var PLAYER_ELO = 1000;       // fed as elo_oppo (rough player strength)
 var aiMoveSeq = 0;           // invalidates in-flight evals on new game / takeback
 
