@@ -149,7 +149,15 @@
   #status.coach .voice { color: #5B9BD5; }
 
   /* ---------- End card ---------- */
-  #card {
+  .gametabs { display: flex; justify-content: center; gap: 10px; padding: 10px 16px 0; }
+  .gametabs button {
+    font-size: 12px; padding: 4px 12px; border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--pw) 15%, transparent);
+    color: color-mix(in srgb, var(--pw) 55%, transparent);
+  }
+  .gametabs button:disabled { opacity: .35; cursor: default; }
+
+  #card, #offer {
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
     background: rgba(0,0,0,.55); z-index: 50; padding: 24px;
   }
@@ -239,6 +247,7 @@
     <span class="nm">Review last game</span><span class="rt" id="lastReviewOpp"></span>
   </button>
   <div class="tiers">
+    <div class="tierrow"><span class="tierlab">Play as</span><span id="colorChips"></span></div>
     <div class="tierrow"><span class="tierlab">Coach</span><span id="coachTierChips"></span></div>
     <div class="tierrow"><span class="tierlab">Review</span><span id="reviewTierChips"></span></div>
   </div>
@@ -260,6 +269,10 @@
   <div class="tools">
     <button class="tool" id="coachBtn">Coach <span class="pips" id="coachPips"></span></button>
     <button class="tool" id="tbBtn">Takeback <span class="pips" id="tbPips"></span></button>
+  </div>
+  <div class="gametabs">
+    <button id="resignBtn">Resign</button>
+    <button id="drawBtn">Offer a draw</button>
   </div>
   <div id="status"></div>
 </section>
@@ -285,6 +298,17 @@
     <p class="spend" id="rvCost"></p>
   </div>
 </section>
+
+<div id="offer" class="hidden">
+  <div class="cardbox">
+    <h2 id="offerTitle"></h2>
+    <p id="offerMsg"></p>
+    <div class="btns">
+      <button id="offerNo">Decline</button>
+      <button id="offerYes" class="primary">Accept</button>
+    </div>
+  </div>
+</div>
 
 <div id="card" class="hidden">
   <div class="cardbox">
@@ -327,6 +351,12 @@ var selected = null;
 var aiTimer = null;
 var over = false;
 var coachLeft = 3, tbLeft = 3;
+var chosenColor = 'w';     // ladder setting: the side you want to play
+var playerColor = 'w';     // this game's side; board flips to match
+var oppColor = 'b';
+var resignOffered = false; // he only asks once per game
+var oppWinPct = 50;        // his latest read of his own chances
+var oppLostStreak = 0;     // consecutive moves he considers lost
 
 var $ = function (id) { return document.getElementById(id); };
 var FILES = 'abcdefgh';
@@ -360,6 +390,15 @@ function renderTierChips(boxId, current, pick) {
 }
 
 function renderTiers() {
+  var cbox = $('colorChips');
+  cbox.innerHTML = '';
+  [['w', 'White'], ['b', 'Black']].forEach(function (c) {
+    var b = document.createElement('button');
+    b.className = 'chip' + (chosenColor === c[0] ? ' on' : '');
+    b.textContent = c[1];
+    b.onclick = function () { chosenColor = c[0]; renderTiers(); };
+    cbox.appendChild(b);
+  });
   renderTierChips('coachTierChips', coachTier, function (t) {
     coachTier = t;
     renderTiers();
@@ -399,8 +438,16 @@ function renderLadder() {
 }
 
 // ---------- Board setup ----------
-function sqName(f, r) { return FILES[f] + (8 - r); }           // f,r are 0-7 from top-left
-function coords(sq) { return { f: FILES.indexOf(sq[0]), r: 8 - parseInt(sq[1], 10) }; }
+// absName: indices straight out of game.board(), always a8-first.
+// sqName/coords: screen <-> square, flipped when the player is Black.
+function absName(f, r) { return FILES[f] + (8 - r); }
+function sqName(f, r) {                                        // f,r are 0-7 from top-left
+  return playerColor === 'w' ? FILES[f] + (8 - r) : FILES[7 - f] + (r + 1);
+}
+function coords(sq) {
+  var f = FILES.indexOf(sq[0]), r = 8 - parseInt(sq[1], 10);
+  return playerColor === 'w' ? { f: f, r: r } : { f: 7 - f, r: 7 - r };
+}
 function place(el, sq) {
   var c = coords(sq);
   el.style.transform = 'translate(' + (c.f * 100) + '%, ' + (c.r * 100) + '%)';
@@ -429,9 +476,9 @@ function rebuildPieces() {
     var el = document.createElement('div');
     el.className = 'piece ' + pc.color;
     el.innerHTML = '<span>' + GLYPH[pc.type] + '</span>';
-    place(el, sqName(f, r));
+    place(el, absName(f, r));
     box.appendChild(el);
-    pieceEls[sqName(f, r)] = el;
+    pieceEls[absName(f, r)] = el;
   }
 }
 
@@ -461,7 +508,7 @@ function setMarks() {
       if (pc && pc.type === 'k' && pc.color === side) {
         var k = document.createElement('div');
         k.className = 'mark chk';
-        place(k, sqName(f, r));
+        place(k, absName(f, r));
         box.appendChild(k);
       }
     }
@@ -514,12 +561,19 @@ function afterMove(mv) {
   setMarks();
   if (mv.captured || game.in_check()) buzz();
   if (game.game_over()) { endGame(); return; }
-  if (game.turn() === 'b') {
+  if (game.turn() === oppColor) {
     setStatus(opp.name + ' is thinking…');
     aiTimer = setTimeout(aiMove, 350 + Math.random() * 400);
   } else {
     setStatus(game.in_check() ? 'Check! Your move.' : 'Your move.');
+    maybeOfferResignation();
   }
+  renderTabs();
+}
+
+function renderTabs() {
+  $('resignBtn').disabled = over;
+  $('drawBtn').disabled = over || !game || game.turn() !== playerColor || !!aiTimer;
 }
 
 function tryPlayerMove(from, to) {
@@ -581,12 +635,14 @@ function aiMove() {
   engine.init(netLoadStatus, netLoadProgress).then(function () {
     return engine.evaluate(game.fen(), opp.rating, PLAYER_ELO);
   }).then(function (r) {
-    if (over || seq !== aiMoveSeq || game.turn() !== 'b' || !r.moves.length) return;
+    if (over || seq !== aiMoveSeq || game.turn() !== oppColor || !r.moves.length) return;
+    // his own read of the position, from his side (value is White's chance)
+    oppWinPct = oppColor === 'w' ? r.value * 100 : 100 - r.value * 100;
     var uci = chooseMaiaMove(r.moves, opp.offLadder ? ANAND_TEMPERATURE : MAIA_TEMPERATURE);
     // keep a touch of think time so instant cached replies still feel human
     var delay = Math.max(0, 400 + Math.random() * 500 - (performance.now() - t0));
     setTimeout(function () {
-      if (over || seq !== aiMoveSeq || game.turn() !== 'b') return;
+      if (over || seq !== aiMoveSeq || game.turn() !== oppColor) return;
       var mv = game.move({
         from: uci.slice(0, 2),
         to: uci.slice(2, 4),
@@ -624,7 +680,7 @@ function squareAt(e) {
   return sqName(f, r);
 }
 
-function playerCanMove() { return !over && game && game.turn() === 'w' && !aiTimer; }
+function playerCanMove() { return !over && game && game.turn() === playerColor && !aiTimer; }
 
 function springBack(el, from) {
   el.classList.remove('drag');
@@ -642,7 +698,7 @@ function onDown(e) {
   var sq = squareAt(e);
   if (!sq) return;
   var pc = game.get(sq);
-  if (pc && pc.color === 'w') {
+  if (pc && pc.color === playerColor) {
     wasSelected = (selected === sq);
     selected = sq;
     showHints(sq);
@@ -891,8 +947,11 @@ function coachEngineData(fen) {
 function coachPayload(d) {
   var lines = [];
   lines.push('Position (FEN): ' + d.fen);
-  lines.push('The student you are coaching is WHITE. It is White to move. ' +
-    'Black is the opponent — Black’s pieces are never "yours" or "the student’s".');
+  var me = playerColor === 'w' ? 'WHITE' : 'BLACK';
+  var them = playerColor === 'w' ? 'Black' : 'White';
+  lines.push('The student you are coaching is ' + me + '. It is ' +
+    (playerColor === 'w' ? 'White' : 'Black') + ' to move. ' + them + ' is the opponent — ' +
+    them + '’s pieces are never "yours" or "the student’s".');
   lines.push(pieceOwnership(d.fen));
   lines.push('Stockfish, depth 18 (the authority):');
   lines.push('- Best move: ' + d.bestSan +
@@ -1085,7 +1144,9 @@ var lastGameRec = null;   // snapshot of the most recently finished game
 var curReview = null;
 var rvSelected = -1;
 
-function gameKey(rec) { return rec.opp + '|' + rec.result + '|' + rec.sans.join(' '); }
+function gameKey(rec) {
+  return rec.opp + '|' + (rec.color || 'w') + '|' + rec.result + '|' + rec.sans.join(' ');
+}
 
 function createReview(rec) {
   var g = new Chess();
@@ -1099,8 +1160,9 @@ function createReview(rec) {
   return {
     opp: rec.opp, result: rec.result, sans: rec.sans,
     fens: fens, ucis: ucis,
-    evals: [], winW: [],
-    moves: [],            // one entry per student (White) move
+    color: rec.color || 'w',   // the side the student played
+    evals: [], win: [],        // win[] is the STUDENT's win probability
+    moves: [],                 // one entry per student move
     counts: {},
     status: 'pending', done: 0, total: fens.length - 1,
     exDone: 0, exTotal: 0, error: null, cost: 0
@@ -1116,6 +1178,9 @@ function rvWaitIfPlaying() {
     })();
   });
 }
+
+// True when ply idx is one of the student's own decisions.
+function studentTurn(rv, idx) { return (idx % 2 === 0) === (rv.color === 'w'); }
 
 function classifyReviewMove(m) {
   if (m.oppGain > 20 && m.loss > 5) return 'missed';
@@ -1134,7 +1199,7 @@ function buildMoveTable(rv) {
   rv.moves = [];
   rv.counts = {};
   var n = rv.fens.length - 1;
-  for (var k = 0; k < n; k += 2) {
+  for (var k = rv.color === 'w' ? 0 : 1; k < n; k += 2) {
     var ev = rv.evals[k];
     if (!ev || !ev.pvs[0]) continue;
     var m = {
@@ -1142,17 +1207,18 @@ function buildMoveTable(rv) {
       san: rv.sans[k],
       uci: rv.ucis[k],
       fenBefore: rv.fens[k],
-      before: rv.winW[k],
-      after: rv.winW[k + 1],
-      loss: Math.max(0, rv.winW[k] - rv.winW[k + 1]),
+      before: rv.win[k],
+      after: rv.win[k + 1],
+      loss: Math.max(0, rv.win[k] - rv.win[k + 1]),
       isBest: rv.ucis[k] === ev.bestmove,
       secondGap: ev.pvs[1]
         ? winPct(pvToCp(ev.pvs[0])) - winPct(pvToCp(ev.pvs[1]))
         : 100,
-      oppGain: k >= 2 ? Math.max(0, rv.winW[k] - rv.winW[k - 1]) : 0,
+      oppGain: k >= 1 ? Math.max(0, rv.win[k] - rv.win[k - 1]) : 0,
       oppSan: k >= 1 ? rv.sans[k - 1] : null,
       bestSan: sanOf(rv.fens[k], ev.bestmove),
       bestLine: sanLine(rv.fens[k], ev.pvs[0].line.split(' '), 6),
+      color: rv.color,
       explanations: {}, exErrors: {}   // keyed by tier
     };
     m.label = classifyReviewMove(m);
@@ -1164,16 +1230,18 @@ function buildMoveTable(rv) {
 
 function reviewPayload(m) {
   var lines = [];
+  var me = m.color === 'w' ? 'WHITE' : 'BLACK';
+  var them = m.color === 'w' ? 'Black' : 'White';
   lines.push('You are reviewing ONE move from a finished game. The student you are ' +
-    'coaching is WHITE. Black is the opponent — Black’s pieces are never "yours" ' +
-    'or "the student’s".');
+    'coaching is ' + me + '. ' + them + ' is the opponent — ' + them + '’s pieces are ' +
+    'never "yours" or "the student’s".');
   lines.push('Position before the move (FEN): ' + m.fenBefore);
   lines.push(pieceOwnership(m.fenBefore));
-  lines.push('The student (White) played: ' + m.san +
+  lines.push('The student (' + (m.color === 'w' ? 'White' : 'Black') + ') played: ' + m.san +
     ' — their win chance went from ' + m.before.toFixed(1) + '% to ' + m.after.toFixed(1) + '%.');
   lines.push('Stockfish’s best move here: ' + m.bestSan + ' | main line: ' + m.bestLine);
   if (m.label === 'missed') {
-    lines.push('IMPORTANT: Black’s previous move (' + m.oppSan + ') was a serious error that ' +
+    lines.push('IMPORTANT: ' + them + '’s previous move (' + m.oppSan + ') was a serious error that ' +
       'raised the student’s win chance by ' + m.oppGain.toFixed(1) + ' points, and the student ' +
       'failed to punish it. Lead with the missed punishment: what ' + m.bestSan +
       ' would have won and how to spot chances like this.');
@@ -1196,11 +1264,11 @@ function runReview(rv) {
   for (i = 0; i < n; i++) {
     (function (idx) {
       chain = chain.then(rvWaitIfPlaying).then(function () {
-        return SF.analyse(rv.fens[idx], { depth: 18, multipv: idx % 2 === 0 ? 3 : 1 })
+        return SF.analyse(rv.fens[idx], { depth: 18, multipv: studentTurn(rv, idx) ? 3 : 1 })
           .catch(stageErr('Stockfish analysis failed at move ' + (Math.floor(idx / 2) + 1)));
       }).then(function (r) {
         rv.evals[idx] = r;
-        rv.winW[idx] = idx % 2 === 0
+        rv.win[idx] = studentTurn(rv, idx)
           ? winPct(pvToCp(r.pvs[0]))
           : 100 - winPct(pvToCp(r.pvs[0]));
         rv.done++;
@@ -1209,7 +1277,7 @@ function runReview(rv) {
     })(i);
   }
   chain.then(function () {
-    rv.winW[n] = rv.result === 'win' ? 100 : (rv.result === 'loss' ? 0 : 50);
+    rv.win[n] = rv.result === 'win' ? 100 : (rv.result === 'loss' ? 0 : 50);
     buildMoveTable(rv);
     rv.status = 'explaining';
     rv.exBusy = true;
@@ -1353,8 +1421,8 @@ function renderRvGraph(rv) {
   if (n < 1) { $('rvGraph').innerHTML = ''; return; }
   var pts = [];
   for (var i = 0; i <= n; i++) {
-    if (rv.winW[i] !== undefined && rv.winW[i] !== null) {
-      pts.push((i / n * 100).toFixed(2) + ',' + (50 - rv.winW[i] / 2).toFixed(2));
+    if (rv.win[i] !== undefined && rv.win[i] !== null) {
+      pts.push((i / n * 100).toFixed(2) + ',' + (50 - rv.win[i] / 2).toFixed(2));
     }
   }
   var dots = '';
@@ -1380,37 +1448,43 @@ function renderRvMoves(rv) {
   var box = $('rvMoves');
   box.innerHTML = '';
   var n = rv.sans.length;
+  // Always laid out as "1. white black"; whichever side the student played
+  // is the one that carries labels and can be tapped.
   for (var k = 0; k < n; k += 2) {
     var num = document.createElement('span');
     num.className = 'rvnum';
     num.textContent = (k / 2 + 1) + '.';
     box.appendChild(num);
 
-    var m = null;
-    for (var j = 0; j < rv.moves.length; j++) if (rv.moves[j].ply === k) { m = rv.moves[j]; break; }
-    var w;
-    if (m && m.flagged) {
-      w = document.createElement('button');
-      w.setAttribute('data-ply', k);
-    } else {
-      w = document.createElement('span');
-    }
-    w.className = 'rvmv' + (m ? ' ' + RV_LABELS[m.label].cls + (m.flagged ? ' flag' : '') : '') +
-      (rvSelected === k ? ' sel' : '');
-    w.textContent = rv.sans[k] + (m && RV_LABELS[m.label].sym ? ' ' + RV_LABELS[m.label].sym : '');
-    box.appendChild(w);
-
-    var b = document.createElement('span');
-    b.className = 'rvmv';
-    b.textContent = k + 1 < n ? rv.sans[k + 1] : '';
-    box.appendChild(b);
+    [k, k + 1].forEach(function (ply) {
+      var cell;
+      if (ply >= n) {
+        cell = document.createElement('span');
+        cell.className = 'rvmv';
+        box.appendChild(cell);
+        return;
+      }
+      var m = null;
+      for (var j = 0; j < rv.moves.length; j++) if (rv.moves[j].ply === ply) { m = rv.moves[j]; break; }
+      if (m && m.flagged) {
+        cell = document.createElement('button');
+        cell.setAttribute('data-ply', ply);
+      } else {
+        cell = document.createElement('span');
+      }
+      cell.className = 'rvmv' + (m ? ' ' + RV_LABELS[m.label].cls + (m.flagged ? ' flag' : '') : '') +
+        (rvSelected === ply ? ' sel' : '');
+      cell.textContent = rv.sans[ply] + (m && RV_LABELS[m.label].sym ? ' ' + RV_LABELS[m.label].sym : '');
+      box.appendChild(cell);
+    });
   }
 }
 
-function renderRvMini(fen, uci) {
+function renderRvMini(fen, uci, flip) {
   var box = $('rvMini');
   box.innerHTML = '';
   var hl = uci ? [uci.slice(0, 2), uci.slice(2, 4)] : [];
+  var pos = function (i) { return (flip ? 7 - i : i) * 12.5; };
   var placement = fen.split(' ')[0].split('/');
   for (var row = 0; row < 8; row++) {          // row 0 = rank 8, top
     var file = 0;
@@ -1419,8 +1493,8 @@ function renderRvMini(fen, uci) {
       if (!isNaN(parseInt(ch, 10))) { file += parseInt(ch, 10); continue; }
       var pc = document.createElement('div');
       pc.className = 'piece ' + (ch === ch.toUpperCase() ? 'w' : 'b');
-      pc.style.left = (file * 12.5) + '%';
-      pc.style.top = (row * 12.5) + '%';
+      pc.style.left = pos(file) + '%';
+      pc.style.top = pos(row) + '%';
       pc.innerHTML = '<span>' + GLYPH[ch.toLowerCase()] + '</span>';
       box.appendChild(pc);
       file++;
@@ -1432,8 +1506,8 @@ function renderRvMini(fen, uci) {
       var name = FILES[f] + (8 - r);
       sq.className = 'rvsq ' + ((f + r) % 2 === 0 ? 'l' : 'd') +
         (hl.indexOf(name) !== -1 ? ' hl' : '');
-      sq.style.left = (f * 12.5) + '%';
-      sq.style.top = (r * 12.5) + '%';
+      sq.style.left = pos(f) + '%';
+      sq.style.top = pos(r) + '%';
       box.insertBefore(sq, box.firstChild);   // squares under pieces
     }
   }
@@ -1446,7 +1520,7 @@ function renderRvDetail(rv) {
   for (var j = 0; j < rv.moves.length; j++) if (rv.moves[j].ply === rvSelected) { m = rv.moves[j]; break; }
   if (!m) { det.classList.add('hidden'); return; }
   det.classList.remove('hidden');
-  renderRvMini(m.fenBefore, m.uci);
+  renderRvMini(m.fenBefore, m.uci, rv.color === 'b');
   var head = 'You played ' + m.san +
     (RV_LABELS[m.label].sym ? ' ' + RV_LABELS[m.label].sym : '') +
     ' (' + RV_LABELS[m.label].txt + '). Best: ' + m.bestSan + '.';
@@ -1457,6 +1531,61 @@ function renderRvDetail(rv) {
   $('rvExplain').innerHTML =
     '<span class="' + RV_LABELS[m.label].cls + '">' + escapeHtml(head) + '</span>\n' +
     escapeHtml(body).replace(/^(GM Anand:)/, '<span class="voice">$1</span>');
+}
+
+// ---------- Resign, draw offers, and his resignation ----------
+// He judges the position with his own net's value head — the number he
+// already produces on every move, so nothing extra is computed.
+var RESIGN_AT = 8;      // his win chance, in percent
+var RESIGN_STREAK = 2;  // consecutive moves before he gives up
+var OFFER_MIN_PLIES = 16;
+
+function showOffer(title, msg, onYes, onNo) {
+  $('offerTitle').textContent = title;
+  $('offerMsg').textContent = msg;
+  $('offer').classList.remove('hidden');
+  $('offerYes').onclick = function () { $('offer').classList.add('hidden'); onYes(); };
+  $('offerNo').onclick = function () { $('offer').classList.add('hidden'); if (onNo) onNo(); };
+}
+
+function playerResign() {
+  if (over || !game || coachBusy) return;
+  showOffer('Resign?', 'Hand the game to ' + opp.name + '?', function () {
+    endGame('resign-player');
+  });
+}
+
+function playerOfferDraw() {
+  if (over || !game || aiTimer || coachBusy) return;
+  if (game.turn() !== playerColor) return;
+  var plies = game.history().length;
+  // He takes a draw when he is not better; he plays on when he is.
+  var accepts = plies >= OFFER_MIN_PLIES && oppWinPct < 45;
+  setStatus('You offered a draw…');
+  setTimeout(function () {
+    if (over) return;
+    if (accepts) {
+      endGame('draw-agreed');
+    } else {
+      setStatus(opp.name + ' declines the draw. Your move.');
+    }
+  }, 700 + Math.random() * 500);
+}
+
+// Called after each of his moves, with his own read of his chances.
+function maybeOfferResignation() {
+  if (over || resignOffered) return;
+  oppLostStreak = oppWinPct <= RESIGN_AT ? oppLostStreak + 1 : 0;
+  if (oppLostStreak < RESIGN_STREAK) return;
+  if (game.history().length < OFFER_MIN_PLIES) return;
+  if (game.turn() !== playerColor) return;
+  resignOffered = true;
+  showOffer(
+    opp.name + ' wants to resign',
+    '“I want to resign.” Accept and the win is yours, or decline and play it out.',
+    function () { endGame('resign-opp'); },
+    function () { setStatus(opp.name + ' plays on. Your move.'); }
+  );
 }
 
 function useTakeback() {
@@ -1662,13 +1791,16 @@ function startGame(o, idx) {
   game = new Chess();
   over = false; selected = null;
   coachLeft = 3; tbLeft = 3;
+  playerColor = chosenColor;
+  oppColor = playerColor === 'w' ? 'b' : 'w';
+  resignOffered = false; oppLostStreak = 0; oppWinPct = 50;
   if (aiTimer) { clearTimeout(aiTimer); aiTimer = null; }
   aiMoveSeq++;
   // Start fetching this opponent's net now (visible progress) so it's
   // ready by move one; then quietly prefetch the other net.
   var other = o.offLadder ? MAIA : ANAND;
   oppEngine().init(netLoadStatus, netLoadProgress).then(function () {
-    if (game.history().length === 0 && !over) setStatus('Your move — you play White.');
+    if (game.history().length === 0 && !over) setStatus(openingStatus());
     other.init(function () {}, function () {}).catch(function () {});
   }).catch(function () {});
   $('oppName').textContent = o.name;
@@ -1676,44 +1808,78 @@ function startGame(o, idx) {
   $('ladder').classList.add('hidden');
   $('gameScr').classList.remove('hidden');
   $('card').classList.add('hidden');
+  $('offer').classList.add('hidden');
   rebuildPieces();
   setMarks();
   clearHints();
   renderPips();
-  setStatus('Your move — you play White.');
+  renderTabs();
+  setStatus(openingStatus());
+  // Playing Black means he opens.
+  if (game.turn() === oppColor) {
+    setStatus(opp.name + ' is thinking…');
+    aiTimer = setTimeout(aiMove, 500 + Math.random() * 400);
+  }
 }
 
-function endGame() {
+function openingStatus() {
+  return playerColor === 'w'
+    ? 'Your move — you play White.'
+    : 'You play Black — ' + opp.name + ' opens.';
+}
+
+// reason: undefined (played out), 'resign-player', 'resign-opp', 'draw-agreed'
+function endGame(reason) {
   over = true;
+  if (aiTimer) { clearTimeout(aiTimer); aiTimer = null; }
+  aiMoveSeq++;
+  $('offer').classList.add('hidden');
+
+  var result;
+  if (reason === 'resign-player') result = 'loss';
+  else if (reason === 'resign-opp') result = 'win';
+  else if (reason === 'draw-agreed') result = 'draw';
+  else if (game.in_checkmate()) result = game.turn() === oppColor ? 'win' : 'loss';
+  else result = 'draw';
+
   lastGameRec = {
     sans: game.history(),
     opp: opp.name,
-    result: game.in_checkmate() ? (game.turn() === 'b' ? 'win' : 'loss') : 'draw'
+    result: result,
+    color: playerColor
   };
+
   var title, msg;
-  if (game.in_checkmate()) {
-    var playerWon = game.turn() === 'b';
-    title = 'Checkmate';
-    if (playerWon) {
-      msg = 'You beat ' + opp.name + ' (' + opp.rating + ')!';
-      if (opp.offLadder) {
-        msg += ' Anand’s not on the ladder — bragging rights only.';
-      } else if (oppIndex === progress) {
-        progress++;
-        msg += progress < LEVELS.length
-          ? ' ' + LEVELS[progress].name + ' (' + LEVELS[progress].rating + ') is now unlocked.'
-          : ' You’ve cleared the whole ladder!';
-      }
-    } else {
-      msg = opp.name + ' beat you. Have another go.';
+  if (reason === 'resign-player') title = 'You resigned';
+  else if (reason === 'resign-opp') title = opp.name + ' resigned';
+  else if (reason === 'draw-agreed') title = 'Draw agreed';
+  else if (game.in_checkmate()) title = 'Checkmate';
+  else title = 'Draw';
+
+  if (result === 'win') {
+    msg = reason === 'resign-opp'
+      ? opp.name + ' (' + opp.rating + ') resigned — the win is yours.'
+      : 'You beat ' + opp.name + ' (' + opp.rating + ')!';
+    if (opp.offLadder) {
+      msg += ' Anand’s not on the ladder — bragging rights only.';
+    } else if (oppIndex === progress) {
+      progress++;
+      msg += progress < LEVELS.length
+        ? ' ' + LEVELS[progress].name + ' (' + LEVELS[progress].rating + ') is now unlocked.'
+        : ' You’ve cleared the whole ladder!';
     }
+  } else if (result === 'loss') {
+    msg = reason === 'resign-player'
+      ? 'You resigned against ' + opp.name + '. Have another go.'
+      : opp.name + ' beat you. Have another go.';
   } else {
-    title = 'Draw';
     msg = 'The game against ' + opp.name + ' ended in a draw.';
   }
+
   $('cardTitle').textContent = title;
   $('cardMsg').textContent = msg;
   $('card').classList.remove('hidden');
+  renderTabs();
   setStatus('');
 }
 
@@ -1746,6 +1912,8 @@ $('ladderBtn').onclick = toLadder;
 $('rematchBtn').onclick = function () { startGame(opp, oppIndex); };
 $('coachBtn').onclick = useCoach;
 $('tbBtn').onclick = useTakeback;
+$('resignBtn').onclick = playerResign;
+$('drawBtn').onclick = playerOfferDraw;
 $('reviewBtn').onclick = startReview;
 $('lastReviewBtn').onclick = startReview;
 $('rvBack').onclick = rvBackToLadder;
