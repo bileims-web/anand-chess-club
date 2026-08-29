@@ -341,12 +341,13 @@
   .rvmv { text-align: left; padding: 3px 8px; border-radius: 6px; }
   .rvmv.flag { border: 1px solid currentColor; }
   .rvmv.sel { background: color-mix(in srgb, var(--pw) 12%, transparent); }
-  .lab-blunder { color: #D9534F; }
-  .lab-mistake { color: #E08A3C; }
-  .lab-inacc   { color: #CDBB4E; }
-  .lab-great   { color: #55B85F; }
-  .lab-best    { color: #7FBF7F; }
-  .lab-missed  { color: #B07CE8; }
+  /* chess.com's classification palette, per the user's request */
+  .lab-blunder { color: #FA412D; }
+  .lab-mistake { color: #FFA459; }
+  .lab-inacc   { color: #F7C631; }
+  .lab-great   { color: #749BBF; }
+  .lab-best    { color: #81B64C; }
+  .lab-missed  { color: #FF7769; }
   .toolrow { display: flex; align-items: center; gap: 8px; }
   .toolrow .tool { flex: 1; min-width: 0; }
   .tiertoggle { display: inline-flex; gap: 4px; flex: none; }
@@ -673,7 +674,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.30';
+var BUILD = '2026-08-29.31';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -1786,7 +1787,7 @@ var REVIEW_SYSTEM =
   'Always be clear whose piece is whose; never call an opponent’s piece "yours".';
 
 var RV_LABELS = {
-  missed:     { sym: '×',  txt: 'Missed chance', cls: 'lab-missed',  flag: true },
+  missed:     { sym: '✗',  txt: 'Missed chance', cls: 'lab-missed',  flag: true },
   blunder:    { sym: '??', txt: 'Blunder',       cls: 'lab-blunder', flag: true },
   mistake:    { sym: '?',  txt: 'Mistake',       cls: 'lab-mistake', flag: true },
   inaccuracy: { sym: '?!', txt: 'Inaccuracy',    cls: 'lab-inacc',   flag: true },
@@ -1795,15 +1796,17 @@ var RV_LABELS = {
   excellent:  { sym: '',   txt: 'Excellent',     cls: '',            flag: false },
   good:       { sym: '',   txt: 'Good',          cls: '',            flag: false }
 };
+// chess.com's badge style: star for best, blue ! for great, salmon ✗ for
+// a miss, traffic-light greens through reds for the rest.
 var RV_BADGES = {
-  great:      { sym: '!',  fill: '#C08A3E', fg: '#1A1D22' },
-  best:       { sym: '★',  fill: '#4E9E58', fg: '#FFFFFF' },
-  excellent:  { sym: '✓',  fill: '#6FA277', fg: '#FFFFFF' },
-  good:       { sym: '•',  fill: '#6C8570', fg: '#FFFFFF' },
-  inaccuracy: { sym: '?!', fill: '#C9B653', fg: '#23261C' },
-  mistake:    { sym: '?',  fill: '#D08640', fg: '#FFFFFF' },
-  blunder:    { sym: '??', fill: '#C4534F', fg: '#FFFFFF' },
-  missed:     { sym: '×',  fill: '#9E72CC', fg: '#FFFFFF' }
+  great:      { sym: '!',  fill: '#749BBF', fg: '#FFFFFF' },
+  best:       { sym: '★',  fill: '#81B64C', fg: '#FFFFFF' },
+  excellent:  { sym: '✓',  fill: '#81B64C', fg: '#FFFFFF' },
+  good:       { sym: '✓',  fill: '#95B776', fg: '#FFFFFF' },
+  inaccuracy: { sym: '?!', fill: '#F7C631', fg: '#5C4E10' },
+  mistake:    { sym: '?',  fill: '#FFA459', fg: '#5C3A10' },
+  blunder:    { sym: '??', fill: '#FA412D', fg: '#FFFFFF' },
+  missed:     { sym: '✗',  fill: '#FF7769', fg: '#FFFFFF' }
 };
 
 var RV_BOOK_PLIES = 10;   // moves this early count as "in book" for the Great rule
