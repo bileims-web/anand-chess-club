@@ -137,15 +137,15 @@
   /* ---------- Game screen ---------- */
   #gameScr { max-width: 520px; margin: 0 auto; padding: 10px 0 24px; }
   .topbar { display: flex; align-items: center; padding: 0 12px 8px; }
-  /* Game screen only: big enough to see and to hit with a thumb. */
-  #back {
+  /* Big enough to see and to hit with a thumb. */
+  #back, #histBack {
     font-size: 34px; line-height: 1; padding: 2px 16px 6px 6px; color: var(--brass);
     min-width: 48px; min-height: 48px; display: flex; align-items: center;
   }
   .who { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; }
   .who .nm { font-size: 16px; }
   .who .rt { font-size: 13px; margin-left: 6px; color: color-mix(in srgb, var(--pw) 55%, transparent); }
-  .topbar .sp { width: 40px; }
+  .topbar .sp { width: 48px; }   /* balances the back button, keeping the title centred */
   .rvsave {
     font-size: 12px; padding: 4px 10px; border-radius: 999px; white-space: nowrap;
     border: 1px solid color-mix(in srgb, var(--pw) 18%, transparent);
@@ -686,7 +686,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.40';
+var BUILD = '2026-08-29.41';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
