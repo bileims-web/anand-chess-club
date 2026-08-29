@@ -111,7 +111,7 @@
   .row .nm { flex: 1; font-size: 16px; }
   .row .rt { font-size: 13px; color: color-mix(in srgb, var(--pw) 55%, transparent); font-variant-numeric: tabular-nums; }
   .row .st { font-size: 13px; }
-  .row.beaten { opacity: .45; }
+  /* A beaten opponent stays bright — dimming read as locked. The tick says won. */
   .row.beaten .st { color: var(--brass); }
   .row.current { border-color: var(--brass); }
   .row.locked { opacity: .28; cursor: default; }
@@ -645,7 +645,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.19';
+var BUILD = '2026-08-29.20';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
