@@ -193,8 +193,6 @@
   </div>
   <div class="tools">
     <button class="tool" id="coachBtn">Coach <span class="pips" id="coachPips"></span></button>
-    <!-- TEMPORARY scaffolding: removed once the real Coach uses the engine. -->
-    <button class="tool" id="sfBtn">SF test</button>
     <button class="tool" id="tbBtn">Takeback <span class="pips" id="tbPips"></span></button>
   </div>
   <div id="status"></div>
@@ -231,12 +229,6 @@ var LEVELS = [
 var MEAN_GIRL = { name: 'Anand', rating: 2400, offLadder: true };
 var THEMES = ['slate', 'dusk', 'night', 'sage'];
 var GLYPH = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
-var COACH_LINES = [
-  'Coach: scan every check, capture and threat before you commit. (Full analysis arrives with the engine.)',
-  'Coach: ask what your opponent’s last move attacks. (Full analysis arrives with the engine.)',
-  'Coach: improve your worst-placed piece. (Full analysis arrives with the engine.)'
-];
-
 var progress = 0;          // ladder levels beaten (memory only)
 var game = null;           // chess.js instance
 var opp = null;            // current opponent
@@ -245,7 +237,7 @@ var pieceEls = {};         // square -> piece element
 var selected = null;
 var aiTimer = null;
 var over = false;
-var coachLeft = 3, tbLeft = 3, coachUses = 0;
+var coachLeft = 3, tbLeft = 3;
 
 var $ = function (id) { return document.getElementById(id); };
 var FILES = 'abcdefgh';
@@ -606,15 +598,256 @@ function renderPips() {
   $('tbBtn').disabled = tbLeft === 0;
 }
 
+// ---------- Coach ----------
+// One tap, one pip: Stockfish (depth 18, MultiPV 3) is the authority;
+// Anand's net proposes his sharper move; if they differ, his move is
+// measured by Stockfish and the gap stated in win percentage. One Claude
+// call writes both voices. Everything is cached by FEN.
+var COACH_SYSTEM =
+  'You explain chess to a beginner rated around 1000. Stockfish is the ' +
+  'authority on what is true — you are only translating it. Never invent a ' +
+  'move, line, or tactic that is not in the data given to you. No engine ' +
+  'numbers in your answer. Two to three sentences per voice. Plain language.\n' +
+  'Anand’s move has been measured by Stockfish. If it is worse, say plainly ' +
+  'that it is worse and roughly what it costs. Never present a losing move as ' +
+  'merely interesting.';
+
+function winPct(cp) {
+  return 50 + 50 * (2 / (1 + Math.exp(-0.00368208 * cp)) - 1);
+}
+function pvToCp(pv) {   // SF pv entry -> centipawns from the side to move
+  if (!pv) return 0;
+  if (pv.mate !== null && pv.mate !== undefined) return pv.mate > 0 ? 10000 : -10000;
+  return pv.cp;
+}
+
+function sanLine(fen, ucis, maxPlies) {
+  var g = new Chess(fen);
+  var out = [];
+  for (var i = 0; i < ucis.length && i < maxPlies; i++) {
+    var u = ucis[i];
+    var mv = g.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u.length > 4 ? u.slice(4) : undefined });
+    if (!mv) break;
+    out.push(mv.san);
+  }
+  return out.join(' ');
+}
+function sanOf(fen, uci) { return sanLine(fen, [uci], 1); }
+
+// -- device-local key + cache storage (same IndexedDB the models use) --
+function idbOpen() {
+  return new Promise(function (resolve, reject) {
+    var req = indexedDB.open('MaiaModels', 1);
+    req.onerror = function () { reject(req.error); };
+    req.onsuccess = function () { resolve(req.result); };
+    req.onupgradeneeded = function (e) {
+      var db = e.target.result;
+      if (!db.objectStoreNames.contains('models')) {
+        db.createObjectStore('models', { keyPath: 'id' });
+      }
+    };
+  });
+}
+function idbGet(id) {
+  return idbOpen().then(function (db) {
+    return new Promise(function (resolve, reject) {
+      var req = db.transaction(['models'], 'readonly').objectStore('models').get(id);
+      req.onsuccess = function () { resolve(req.result || null); };
+      req.onerror = function () { reject(req.error); };
+    });
+  });
+}
+function idbPut(obj) {
+  return idbOpen().then(function (db) {
+    return new Promise(function (resolve, reject) {
+      var req = db.transaction(['models'], 'readwrite').objectStore('models').put(obj);
+      req.onsuccess = function () { resolve(); };
+      req.onerror = function () { reject(req.error); };
+    });
+  });
+}
+function idbDelete(id) {
+  return idbOpen().then(function (db) {
+    return new Promise(function (resolve, reject) {
+      var req = db.transaction(['models'], 'readwrite').objectStore('models').delete(id);
+      req.onsuccess = function () { resolve(); };
+      req.onerror = function () { reject(req.error); };
+    });
+  });
+}
+
+function getCoachKey() {
+  return idbGet('claude-api-key').then(function (rec) {
+    if (rec && rec.key) return rec.key;
+    var k = window.prompt('Paste your Claude API key for the Coach (kept only on this device):');
+    if (!k || !k.trim()) throw new Error('no API key entered');
+    k = k.trim();
+    return idbPut({ id: 'claude-api-key', key: k }).catch(function () {}).then(function () { return k; });
+  });
+}
+
+// -- engine work, cached by FEN --
+var coachData = {};   // fen -> Promise of measured analysis
+var coachText = {};   // fen -> successful Claude prose
+
+function coachEngineData(fen) {
+  if (coachData[fen]) return coachData[fen];
+  var p = SF.init().then(function () {
+    return Promise.all([
+      SF.analyse(fen, { depth: 18, multipv: 3 }),
+      ANAND.init().then(function () { return ANAND.evaluate(fen); })
+    ]);
+  }).then(function (rs) {
+    var sf = rs[0];
+    var best = sf.pvs[0];
+    if (!best) throw new Error('no line found');
+    var d = {
+      fen: fen,
+      bestSan: sanOf(fen, sf.bestmove),
+      bestLine: sanLine(fen, best.line.split(' '), 6),
+      bestMate: best.mate,
+      bestWin: winPct(pvToCp(best)),
+      alts: sf.pvs.slice(1).map(function (pv) {
+        return { san: sanOf(fen, pv.move), win: winPct(pvToCp(pv)) };
+      }),
+      anandUci: rs[1].moves[0][0]
+    };
+    d.anandSan = sanOf(fen, d.anandUci);
+    d.agree = d.anandUci === sf.bestmove;
+    if (d.agree) return d;
+    // measure Anand's move: evaluate the position it leaves, same depth
+    var g = new Chess(fen);
+    g.move({
+      from: d.anandUci.slice(0, 2),
+      to: d.anandUci.slice(2, 4),
+      promotion: d.anandUci.length > 4 ? d.anandUci.slice(4) : undefined
+    });
+    var childFen = g.fen();
+    return SF.analyse(childFen, { depth: 18, multipv: 1 }).then(function (r2) {
+      var reply = r2.pvs[0];
+      d.anandWin = 100 - winPct(pvToCp(reply));   // child eval is opponent-to-move
+      d.anandCost = d.bestWin - d.anandWin;
+      d.anandLine = d.anandSan + (reply ? ' ' + sanLine(childFen, reply.line.split(' '), 5) : '');
+      return d;
+    });
+  });
+  p = p.catch(function (e) { delete coachData[fen]; throw e; });
+  coachData[fen] = p;
+  return p;
+}
+
+function coachPayload(d) {
+  var lines = [];
+  lines.push('Position (FEN): ' + d.fen);
+  lines.push('The student is playing White and it is White to move.');
+  lines.push('Stockfish, depth 18 (the authority):');
+  lines.push('- Best move: ' + d.bestSan +
+    ' | White win chance with best play: ' + d.bestWin.toFixed(1) + '%' +
+    (d.bestMate ? ' | this line forces checkmate in ' + Math.abs(d.bestMate) : '') +
+    ' | main line: ' + d.bestLine);
+  d.alts.forEach(function (a) {
+    lines.push('- Alternative: ' + a.san + ' (win chance ' + a.win.toFixed(1) + '%)');
+  });
+  if (d.agree) {
+    lines.push('Anand’s suggestion: ' + d.anandSan + ' — the SAME move as Stockfish’s best.');
+    lines.push('They agree. Reply with ONE short line saying both recommend ' + d.bestSan +
+      ' and, in plain words, why it is good. Do not manufacture a disagreement.');
+  } else {
+    lines.push('Anand’s suggestion: ' + d.anandSan +
+      ' | measured by Stockfish: White win chance ' + d.anandWin.toFixed(1) + '%, which is ' +
+      d.anandCost.toFixed(1) + ' percentage points worse than the best move' +
+      ' | line after it: ' + d.anandLine);
+    lines.push('Reply with exactly two short paragraphs, the first starting "Stockfish:" ' +
+      'explaining the best move, the second starting "Anand:" pitching his suggestion ' +
+      'in his sharp voice while stating plainly what it costs.');
+  }
+  return lines.join('\n');
+}
+
+function coachAsk(payload, key) {
+  return fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': key,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-5',
+      max_tokens: 400,
+      system: COACH_SYSTEM,
+      messages: [{ role: 'user', content: payload }]
+    })
+  }).then(function (res) {
+    if (res.status === 401 || res.status === 403) {
+      return idbDelete('claude-api-key').catch(function () {}).then(function () {
+        throw new Error('API key rejected — tap Coach to enter a new one');
+      });
+    }
+    if (!res.ok) throw new Error('Claude API error ' + res.status);
+    return res.json();
+  }).then(function (j) {
+    var txt = (j.content || []).filter(function (c) { return c.type === 'text'; })
+      .map(function (c) { return c.text; }).join(' ').trim();
+    if (!txt) throw new Error('empty reply');
+    return txt;
+  });
+}
+
+var coachBusy = false;
+var coachSpinTimer = null;
+var COACH_DOTS = ['.', '..', '...'];
+
+function coachSpinner(on) {
+  if (coachSpinTimer) { clearInterval(coachSpinTimer); coachSpinTimer = null; }
+  if (on) {
+    var n = 0;
+    setStatus('Coach is thinking.');
+    coachSpinTimer = setInterval(function () {
+      n = (n + 1) % 3;
+      setStatus('Coach is thinking' + COACH_DOTS[n]);
+    }, 400);
+  }
+}
+
+function coachShow(fen, text) {
+  // don't clobber the status if the position moved on while we worked
+  if (!over && game && game.fen() === fen) setStatus(text);
+}
+
 function useCoach() {
-  if (coachLeft === 0 || over || game.turn() !== 'w' || aiTimer) return;
+  if (over || game.turn() !== 'w' || aiTimer || coachBusy) return;
+  var fen = game.fen();
+  if (coachText[fen]) { setStatus(coachText[fen]); return; }   // cached: free
+  if (coachLeft === 0) return;
   coachLeft--;
-  setStatus(COACH_LINES[coachUses++ % COACH_LINES.length]);
   renderPips();
+  coachBusy = true;
+  getCoachKey().then(function (key) {
+    coachSpinner(true);
+    return coachEngineData(fen).then(function (d) {
+      return coachAsk(coachPayload(d), key).then(function (txt) {
+        coachText[fen] = txt;
+        coachSpinner(false);
+        coachShow(fen, txt);
+      }, function (apiErr) {
+        // API down: still show Stockfish's move, no prose
+        coachSpinner(false);
+        coachShow(fen, 'Stockfish: ' + d.bestSan + '. (Coach offline: ' + apiErr.message + ')');
+      });
+    });
+  }).catch(function (err) {
+    // nothing useful produced: refund the pip
+    coachSpinner(false);
+    coachLeft++;
+    renderPips();
+    coachShow(fen, 'Coach unavailable: ' + err.message);
+  }).then(function () { coachBusy = false; });
 }
 
 function useTakeback() {
-  if (tbLeft === 0 || over || game.turn() !== 'w' || aiTimer) return;
+  if (tbLeft === 0 || over || game.turn() !== 'w' || aiTimer || coachBusy) return;
   if (game.history().length < 2) return;
   game.undo();
   game.undo();
@@ -807,41 +1040,11 @@ function makeNetEngine(workerFile, modelUrl, modelVersion) {
 var MAIA = makeNetEngine('maia.worker.js', 'models/maia3_simplified.onnx', '3');
 var ANAND = makeNetEngine('anand.worker.js', 'models/meangirl-8.onnx', '1');
 
-// TEMPORARY scaffolding: prints the engine's verdict to the status line.
-var sfBusy = false;
-function sfTest() {
-  if (sfBusy) return;
-  sfBusy = true;
-  var fen = game.fen();
-  var whiteToMove = game.turn() === 'w';
-  setStatus('SF: loading engine…');
-  SF.init().then(function (inf) {
-    setStatus('SF: thinking (depth 18)…');
-    var t0 = performance.now();
-    return SF.analyse(fen, { depth: 18, multipv: 3 }).then(function (r) {
-      var secs = ((performance.now() - t0) / 1000).toFixed(1);
-      var top = r.pvs[0];
-      var score = '?';
-      if (top && top.mate !== null) {
-        score = '#' + (whiteToMove ? top.mate : -top.mate);
-      } else if (top) {
-        var cp = whiteToMove ? top.cp : -top.cp;
-        score = (cp >= 0 ? '+' : '') + (cp / 100).toFixed(2);
-      }
-      setStatus('SF: best ' + r.bestmove + ' ' + score +
-        ' · d' + (top ? top.depth : 18) + ' · ' + secs + 's · ' +
-        inf.threads + (inf.threads === 1 ? ' thread' : ' threads'));
-    });
-  }).catch(function (err) {
-    setStatus('SF error: ' + err.message);
-  }).then(function () { sfBusy = false; });
-}
-
 function startGame(o, idx) {
   opp = o; oppIndex = idx;
   game = new Chess();
   over = false; selected = null;
-  coachLeft = 3; tbLeft = 3; coachUses = 0;
+  coachLeft = 3; tbLeft = 3;
   if (aiTimer) { clearTimeout(aiTimer); aiTimer = null; }
   aiMoveSeq++;
   // Start fetching this opponent's net now (visible progress) so it's
@@ -914,7 +1117,6 @@ $('back').onclick = toLadder;
 $('ladderBtn').onclick = toLadder;
 $('rematchBtn').onclick = function () { startGame(opp, oppIndex); };
 $('coachBtn').onclick = useCoach;
-$('sfBtn').onclick = sfTest;
 $('tbBtn').onclick = useTakeback;
 </script>
 </body>
