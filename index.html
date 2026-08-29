@@ -258,7 +258,11 @@
   .swatch .pc { width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; }
   .swatch .pc svg { width: 100%; height: 100%; }
   .swatch .pc span { font-size: 30px; line-height: 1; color: var(--pw); }
-  .sheetfoot { margin-top: 20px; display: flex; justify-content: center; }
+  .credits {
+    margin: 18px 2px 0; font-size: 11px; line-height: 1.5;
+    color: color-mix(in srgb, var(--pw) 32%, transparent);
+  }
+  .sheetfoot { margin-top: 14px; display: flex; justify-content: center; }
   .sheetfoot button {
     font-size: 13px; padding: 8px 16px; border-radius: 999px;
     border: 1px solid color-mix(in srgb, var(--pw) 20%, transparent);
@@ -469,6 +473,11 @@
       <div class="swatches" id="themeSwatches"></div>
       <p class="sheetlab">Pieces</p>
       <div class="swatches" id="pieceSwatches"></div>
+      <p class="credits">
+        Pieces: Merida by Armando Hernandez Marroquin and Cburnett by Colin M.L.
+        Burnett (GPLv2+); Chessnut by Alexis Luengas (Apache-2.0); Alpha by Eric
+        Bentzen (free for personal, non-commercial use).
+      </p>
       <div class="sheetfoot">
         <button id="forgetKeyBtn">Forget API key</button>
       </div>
@@ -541,7 +550,8 @@ var PIECE_CHOICES = [
   { id: 'classic',  name: 'Classic' },
   { id: 'merida',   name: 'Merida' },
   { id: 'cburnett', name: 'Cburnett' },
-  { id: 'chessnut', name: 'Chessnut' }
+  { id: 'chessnut', name: 'Chessnut' },
+  { id: 'alpha',    name: 'Alpha' }
 ];
 var THEME_CHOICES = [
   { id: 'slate',  name: 'Slate',  light: '#D8CEBD', dark: '#55606E' },
@@ -590,7 +600,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.12';
+var BUILD = '2026-08-29.13';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
