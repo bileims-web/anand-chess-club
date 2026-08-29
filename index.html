@@ -209,6 +209,13 @@
   .lab-great   { color: #55B85F; }
   .lab-best    { color: #7FBF7F; }
   .lab-missed  { color: #B07CE8; }
+  .tiers { margin: 26px 0 0; }
+  .tierrow { display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 8px; }
+  .tierrow span[id] { display: inline-flex; gap: 8px; }
+  .tierlab {
+    width: 56px; text-align: right; font-size: 12px;
+    color: color-mix(in srgb, var(--pw) 45%, transparent);
+  }
   .spend {
     text-align: center; font-size: 12px; margin: 18px 0 0;
     color: color-mix(in srgb, var(--pw) 35%, transparent);
@@ -231,6 +238,10 @@
   <button class="row hidden" id="lastReviewBtn">
     <span class="nm">Review last game</span><span class="rt" id="lastReviewOpp"></span>
   </button>
+  <div class="tiers">
+    <div class="tierrow"><span class="tierlab">Coach</span><span id="coachTierChips"></span></div>
+    <div class="tierrow"><span class="tierlab">Review</span><span id="reviewTierChips"></span></div>
+  </div>
   <p class="spend" id="ladderSpend"></p>
 </section>
 
@@ -332,6 +343,31 @@ function renderThemes() {
     b.textContent = t.charAt(0).toUpperCase() + t.slice(1);
     b.onclick = function () { document.body.dataset.theme = t; renderThemes(); };
     box.appendChild(b);
+  });
+}
+
+// Casual vs professional: the same facts, written with more or less care.
+function renderTierChips(boxId, current, pick) {
+  var box = $(boxId);
+  box.innerHTML = '';
+  TIERS.forEach(function (t) {
+    var b = document.createElement('button');
+    b.className = 'chip' + (current === t ? ' on' : '');
+    b.textContent = t.charAt(0).toUpperCase() + t.slice(1);
+    b.onclick = function () { pick(t); };
+    box.appendChild(b);
+  });
+}
+
+function renderTiers() {
+  renderTierChips('coachTierChips', coachTier, function (t) {
+    coachTier = t;
+    renderTiers();
+  });
+  renderTierChips('reviewTierChips', reviewTier, function (t) {
+    reviewTier = t;
+    renderTiers();
+    ensureExplanations();
   });
 }
 
@@ -887,8 +923,13 @@ function coachPayload(d) {
 // The live Coach runs on Sonnet: it must answer in a second or two on a
 // narrow, well-specified task. The review writes its explanations offline,
 // where the stronger model is worth the extra time.
-var COACH_MODEL = 'claude-sonnet-5';
-var REVIEW_MODEL = 'claude-opus-4-6';
+// Two coaching tiers, selectable per surface. The senior thinks harder and
+// costs more; the junior is quicker and cheaper. Both are handed exactly the
+// same Stockfish facts, so this only changes how the advice is written.
+var TIERS = ['casual', 'professional'];
+var TIER_MODELS = { casual: 'claude-sonnet-5', professional: 'claude-opus-4-6' };
+var coachTier = 'casual';         // live: must answer while you wait at the board
+var reviewTier = 'professional';  // read at leisure after the game
 
 // Published rates, dollars per million tokens (input / output).
 var MODEL_RATES = {
@@ -915,7 +956,7 @@ function coachAsk(payload, key, system, model, onCost) {
       'anthropic-dangerous-direct-browser-access': 'true'
     },
     body: JSON.stringify({
-      model: model || COACH_MODEL,
+      model: model || TIER_MODELS[coachTier],
       max_tokens: 400,
       system: system || COACH_SYSTEM,
       messages: [{ role: 'user', content: payload }]
@@ -940,7 +981,7 @@ function coachAsk(payload, key, system, model, onCost) {
       throw new Error('Claude API error ' + res.status + apiMsg);
     });
   }).then(function (j) {
-    var cost = askCost(model || COACH_MODEL, j.usage);
+    var cost = askCost(model || TIER_MODELS[coachTier], j.usage);
     spendTotal += cost;
     if (onCost) onCost(cost);
     var txt = (j.content || []).filter(function (c) { return c.type === 'text'; })
@@ -985,7 +1026,10 @@ function coachShow(fen, text) {
 function useCoach() {
   if (over || game.turn() !== 'w' || aiTimer || coachBusy) return;
   var fen = game.fen();
-  if (coachText[fen]) { coachShow(fen, coachText[fen]); return; }   // cached: free
+  // Cached per tier: switching tiers asks again rather than replaying the
+  // other tier's answer. The engine work underneath is shared either way.
+  var ck = fen + '|' + coachTier;
+  if (coachText[ck]) { coachShow(fen, coachText[ck]); return; }   // cached: free
   if (coachLeft === 0) return;
   coachLeft--;
   renderPips();
@@ -993,8 +1037,8 @@ function useCoach() {
   getCoachKey().then(function (key) {
     coachSpinner(true);
     return coachEngineData(fen).then(function (d) {
-      return coachAsk(coachPayload(d), key).then(function (txt) {
-        coachText[fen] = txt;
+      return coachAsk(coachPayload(d), key, null, TIER_MODELS[coachTier]).then(function (txt) {
+        coachText[ck] = txt;
         coachSpinner(false);
         coachShow(fen, txt);
       }, function (apiErr) {
@@ -1109,7 +1153,7 @@ function buildMoveTable(rv) {
       oppSan: k >= 1 ? rv.sans[k - 1] : null,
       bestSan: sanOf(rv.fens[k], ev.bestmove),
       bestLine: sanLine(rv.fens[k], ev.pvs[0].line.split(' '), 6),
-      explanation: null, exError: null
+      explanations: {}, exErrors: {}   // keyed by tier
     };
     m.label = classifyReviewMove(m);
     m.flagged = RV_LABELS[m.label].flag;
@@ -1168,20 +1212,47 @@ function runReview(rv) {
     rv.winW[n] = rv.result === 'win' ? 100 : (rv.result === 'loss' ? 0 : 50);
     buildMoveTable(rv);
     rv.status = 'explaining';
+    rv.exBusy = true;
     renderReviewIfVisible();
     return runExplanations(rv);
   }).then(function () {
+    rv.exBusy = false;
     rv.status = 'done';
     renderReviewIfVisible();
   }).catch(function (e) {
+    rv.exBusy = false;
     rv.status = 'error';
     rv.error = e.message;
     renderReviewIfVisible();
   });
 }
 
+// Called when the review tier changes, or the screen is opened: fills in
+// whatever the selected tier is still missing.
+function ensureExplanations() {
+  var rv = curReview;
+  if (!rv || rv.exBusy || rv.status !== 'done') return;
+  var missing = rv.moves.some(function (m) {
+    return m.flagged && !m.explanations[reviewTier] && !m.exErrors[reviewTier];
+  });
+  if (!missing) { renderReviewIfVisible(); return; }
+  rv.exBusy = true;
+  rv.status = 'explaining';
+  renderReviewIfVisible();
+  runExplanations(rv).catch(function () {}).then(function () {
+    rv.exBusy = false;
+    rv.status = 'done';
+    renderReviewIfVisible();
+  });
+}
+
+// Writes the explanations missing for the tier now selected. Switching tiers
+// re-asks only the flagged moves; the Stockfish analysis is never redone.
 function runExplanations(rv) {
-  var flagged = rv.moves.filter(function (m) { return m.flagged; });
+  var tier = reviewTier;
+  var flagged = rv.moves.filter(function (m) {
+    return m.flagged && !m.explanations[tier] && !m.exErrors[tier];
+  });
   rv.exTotal = flagged.length;
   rv.exDone = 0;
   if (!flagged.length) return Promise.resolve();
@@ -1189,11 +1260,11 @@ function runExplanations(rv) {
     var chain = Promise.resolve();
     flagged.forEach(function (m) {
       chain = chain.then(function () {
-        return coachAsk(reviewPayload(m), key, REVIEW_SYSTEM, REVIEW_MODEL, function (c) {
+        return coachAsk(reviewPayload(m), key, REVIEW_SYSTEM, TIER_MODELS[tier], function (c) {
           rv.cost += c;
         }).then(
-          function (txt) { m.explanation = txt; },
-          function (err) { m.exError = err.message; }
+          function (txt) { m.explanations[tier] = txt; },
+          function (err) { m.exErrors[tier] = err.message; }
         );
       }).then(function () {
         rv.exDone++;
@@ -1202,7 +1273,7 @@ function runExplanations(rv) {
     });
     return chain;
   }, function (keyErr) {
-    flagged.forEach(function (m) { m.exError = keyErr.message; });
+    flagged.forEach(function (m) { m.exErrors[tier] = keyErr.message; });
   });
 }
 
@@ -1222,6 +1293,7 @@ function startReview() {
   $('reviewScr').classList.remove('hidden');
   $('rvOpp').textContent = 'vs ' + curReview.opp;
   renderReview();
+  ensureExplanations();   // fills in the tier if it changed since last time
 }
 
 function rvBackToLadder() {
@@ -1379,12 +1451,12 @@ function renderRvDetail(rv) {
     (RV_LABELS[m.label].sym ? ' ' + RV_LABELS[m.label].sym : '') +
     ' (' + RV_LABELS[m.label].txt + '). Best: ' + m.bestSan + '.';
   var body;
-  if (m.explanation) body = m.explanation;
-  else if (m.exError) body = '(No explanation — ' + m.exError + ')';
-  else body = rv.status === 'done' ? '' : '(Writing explanation…)';
+  if (m.explanations[reviewTier]) body = 'GM Anand: ' + m.explanations[reviewTier];
+  else if (m.exErrors[reviewTier]) body = '(No explanation — ' + m.exErrors[reviewTier] + ')';
+  else body = rv.status === 'done' ? '' : '(GM Anand is writing…)';
   $('rvExplain').innerHTML =
     '<span class="' + RV_LABELS[m.label].cls + '">' + escapeHtml(head) + '</span>\n' +
-    escapeHtml(body);
+    escapeHtml(body).replace(/^(GM Anand:)/, '<span class="voice">$1</span>');
 }
 
 function useTakeback() {
@@ -1662,6 +1734,7 @@ function toLadder() {
 // ---------- Wire up ----------
 buildSquares();
 renderThemes();
+renderTiers();
 renderLadder();
 var board = $('board');
 board.addEventListener('pointerdown', onDown);
