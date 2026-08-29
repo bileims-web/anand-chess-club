@@ -243,6 +243,9 @@
   <h1>Anand Chess Club</h1>
   <p class="sub">Beat a member to meet the next one.</p>
   <div id="rows"></div>
+  <button class="row hidden" id="resumeBtn">
+    <span class="nm">Resume game</span><span class="rt" id="resumeOpp"></span>
+  </button>
   <button class="row hidden" id="lastReviewBtn">
     <span class="nm">Review last game</span><span class="rt" id="lastReviewOpp"></span>
   </button>
@@ -451,11 +454,15 @@ function loadState() {
       spendTotal += st.spendTotal;   // add, in case a call already billed
     }
   }).catch(function () {}).then(function () {
+    return loadGame();
+  }).then(function () {
     stateLoaded = true;
     renderThemes();
     renderTiers();
     renderLadder();
     renderSpend();
+    $('resumeBtn').classList.toggle('hidden', !pendingGame);
+    $('resumeOpp').textContent = pendingGame ? 'vs ' + pendingGame.oppName : '';
   });
 }
 
@@ -617,6 +624,7 @@ function afterMove(mv) {
     setStatus(game.in_check() ? 'Check! Your move.' : 'Your move.');
     maybeOfferResignation();
   }
+  saveGame();
   renderTabs();
 }
 
@@ -1133,7 +1141,7 @@ function coachShow(fen, text) {
 }
 
 function useCoach() {
-  if (over || game.turn() !== 'w' || aiTimer || coachBusy) return;
+  if (over || game.turn() !== playerColor || aiTimer || coachBusy) return;
   var fen = game.fen();
   // Cached per tier: switching tiers asks again rather than replaying the
   // other tier's answer. The engine work underneath is shared either way.
@@ -1142,6 +1150,7 @@ function useCoach() {
   if (coachLeft === 0) return;
   coachLeft--;
   renderPips();
+  saveGame();
   coachBusy = true;
   getCoachKey().then(function (key) {
     coachSpinner(true);
@@ -1639,7 +1648,7 @@ function maybeOfferResignation() {
 }
 
 function useTakeback() {
-  if (tbLeft === 0 || over || game.turn() !== 'w' || aiTimer || coachBusy) return;
+  if (tbLeft === 0 || over || game.turn() !== playerColor || aiTimer || coachBusy) return;
   if (game.history().length < 2) return;
   game.undo();
   game.undo();
@@ -1649,6 +1658,7 @@ function useTakeback() {
   rebuildPieces();
   setMarks();
   renderPips();
+  saveGame();
   setStatus('Took back your last move.');
 }
 
@@ -1836,14 +1846,23 @@ function makeNetEngine(workerFile, modelUrl, modelVersion) {
 var MAIA = makeNetEngine('maia.worker.js', 'models/maia3_simplified.onnx', '3');
 var ANAND = makeNetEngine('anand.worker.js', 'models/meangirl-8.onnx', '1');
 
-function startGame(o, idx) {
+function startGame(o, idx, resume) {
   opp = o; oppIndex = idx;
   game = new Chess();
   over = false; selected = null;
   coachLeft = 3; tbLeft = 3;
-  playerColor = chosenColor;
+  playerColor = resume ? resume.color : chosenColor;
   oppColor = playerColor === 'w' ? 'b' : 'w';
   resignOffered = false; oppLostStreak = 0; oppWinPct = 50;
+  if (resume) {
+    // replay the saved moves; anything illegal means a stale record
+    for (var ri = 0; ri < resume.sans.length; ri++) {
+      if (!game.move(resume.sans[ri])) break;
+    }
+    coachLeft = resume.coachLeft;
+    tbLeft = resume.tbLeft;
+    resignOffered = !!resume.resignOffered;
+  }
   if (aiTimer) { clearTimeout(aiTimer); aiTimer = null; }
   aiMoveSeq++;
   // Start fetching this opponent's net now (visible progress) so it's
@@ -1864,12 +1883,56 @@ function startGame(o, idx) {
   clearHints();
   renderPips();
   renderTabs();
-  setStatus(openingStatus());
-  // Playing Black means he opens.
+  setStatus(game.history().length
+    ? (game.in_check() ? 'Check! Your move.' : 'Your move.')
+    : openingStatus());
+  saveGame();
+  // He opens when you are Black, and takes his turn again on resume.
   if (game.turn() === oppColor) {
     setStatus(opp.name + ' is thinking…');
     aiTimer = setTimeout(aiMove, 500 + Math.random() * 400);
   }
+}
+
+// ---------- Unfinished game ----------
+// The game in progress is written on every move so closing the tab, or
+// stepping back to the ladder, leaves it waiting rather than lost.
+var GAME_KEY = 'current-game';
+var pendingGame = null;
+
+function saveGame() {
+  if (!game || over || !opp) return;
+  pendingGame = {
+    id: GAME_KEY,
+    sans: game.history(),
+    oppIndex: oppIndex,
+    oppName: opp.name,
+    color: playerColor,
+    coachLeft: coachLeft,
+    tbLeft: tbLeft,
+    resignOffered: resignOffered
+  };
+  idbPut(pendingGame).catch(function () {});
+}
+
+function clearSavedGame() {
+  pendingGame = null;
+  idbDelete(GAME_KEY).catch(function () {});
+}
+
+function loadGame() {
+  return idbGet(GAME_KEY).then(function (rec) {
+    if (rec && rec.sans && rec.sans.length &&
+        (rec.oppIndex === -1 || LEVELS[rec.oppIndex])) {
+      pendingGame = rec;
+    }
+  }).catch(function () {});
+}
+
+function resumeGame() {
+  if (!pendingGame) return;
+  var o = pendingGame.oppIndex >= 0 ? LEVELS[pendingGame.oppIndex] : MEAN_GIRL;
+  if (o) startGame(o, pendingGame.oppIndex, pendingGame);
 }
 
 function openingStatus() {
@@ -1927,6 +1990,7 @@ function endGame(reason) {
     msg = 'The game against ' + opp.name + ' ended in a draw.';
   }
 
+  clearSavedGame();
   $('cardTitle').textContent = title;
   $('cardMsg').textContent = msg;
   $('card').classList.remove('hidden');
@@ -1941,6 +2005,8 @@ function toLadder() {
   $('card').classList.add('hidden');
   $('reviewScr').classList.add('hidden');
   $('ladder').classList.remove('hidden');
+  $('resumeBtn').classList.toggle('hidden', !pendingGame);
+  $('resumeOpp').textContent = pendingGame ? 'vs ' + pendingGame.oppName : '';
   $('lastReviewBtn').classList.toggle('hidden', !lastGameRec);
   $('lastReviewOpp').textContent = lastGameRec ? 'vs ' + lastGameRec.opp : '';
   renderSpend();
@@ -1963,6 +2029,7 @@ $('ladderBtn').onclick = toLadder;
 $('rematchBtn').onclick = function () { startGame(opp, oppIndex); };
 $('coachBtn').onclick = useCoach;
 $('tbBtn').onclick = useTakeback;
+$('resumeBtn').onclick = resumeGame;
 $('resignBtn').onclick = playerResign;
 $('drawBtn').onclick = playerOfferDraw;
 $('reviewBtn').onclick = startReview;
