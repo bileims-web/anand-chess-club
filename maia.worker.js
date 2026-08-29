@@ -306,7 +306,7 @@ self.onmessage = function (e) {
             if (contentLength > 0) {
               // the server reports the compressed size, so cap what we show
               var progress = Math.min(99, Math.floor((received / contentLength) * 100));
-              if (progress >= lastReported + 5) {
+              if (progress >= lastReported + 1) {
                 postMessage({ type: 'progress', progress: progress });
                 lastReported = progress;
               }

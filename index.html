@@ -673,7 +673,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.25';
+var BUILD = '2026-08-29.26';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -2599,7 +2599,7 @@ var SF = (function () {
 
   function ensureWorker() {
     if (worker) return;
-    worker = new Worker('stockfish.worker.js');
+    worker = new Worker('stockfish.worker.js?v=' + BUILD);
     worker.onmessage = function (e) {
       var m = e.data || {};
       var p = pending[m.id];
@@ -2685,9 +2685,13 @@ function makeNetEngine(workerFile, modelUrl, modelVersion) {
 
   function ensureWorker() {
     if (worker) return;
-    worker = new Worker(workerFile);
+    // ?v= so a page update can never run last build's cached worker
+    worker = new Worker(workerFile + '?v=' + BUILD);
     worker.onmessage = function (e) {
       var m = e.data || {};
+      if (readyPromise && (m.type === 'status' || m.type === 'progress')) {
+        readyPromise.beat = Date.now();
+      }
       if (m.type === 'status') {
         if (m.status === 'no-cache') worker.postMessage({ type: 'download' });
         if (m.status === 'ready' && readyPromise && readyPromise.resolve) readyPromise.resolve();
@@ -2727,6 +2731,7 @@ function makeNetEngine(workerFile, modelUrl, modelVersion) {
     if (readyPromise) return readyPromise.promise;
     ensureWorker();
     var box = {};
+    box.beat = Date.now();   // stamped again on every status/progress message
     box.promise = new Promise(function (resolve, reject) {
       box.resolve = resolve;
       box.reject = reject;
@@ -2735,9 +2740,21 @@ function makeNetEngine(workerFile, modelUrl, modelVersion) {
         modelUrl: modelUrl,
         modelVersion: modelVersion
       });
-      setTimeout(function () { reject(new Error('model load timed out')); }, 300000);
+      // A healthy load reports in constantly. Prolonged silence means it
+      // is wedged — say so quickly rather than spinning for five minutes.
+      var watch = setInterval(function () {
+        if (Date.now() - box.beat > 45000) {
+          clearInterval(watch);
+          reject(new Error('model load stalled'));
+        }
+      }, 5000);
+      box.settle = function () { clearInterval(watch); };
     });
-    box.promise = box.promise.catch(function (err) {
+    box.promise = box.promise.then(function (v) {
+      box.settle();
+      return v;
+    }, function (err) {
+      box.settle();
       readyPromise = null;   // allow a retry
       throw err;
     });
