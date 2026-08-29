@@ -158,6 +158,8 @@
   .pip { width: 9px; height: 9px; border-radius: 50%; background: var(--brass); }
   .pips.many { gap: 4px; }
   .pips.many .pip { width: 7px; height: 7px; }
+  .pips.lots { gap: 3px; }
+  .pips.lots .pip { width: 6px; height: 6px; }
   .pip.spent { opacity: .22; }
 
   #board {
@@ -560,7 +562,7 @@ var LEVELS = [
   { name: 'Prize Winner',    rating: 1600 },
   { name: 'The Champion',    rating: 1900 }
 ];
-var MEAN_GIRL = { name: 'Anand', rating: 2400, offLadder: true, avatarKind: 'disguise' };
+var MEAN_GIRL = { name: 'Anand', rating: 2700, offLadder: true, avatarKind: 'disguise' };
 var GLYPH = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
 var PIECE_CHOICES = [
   { id: 'classic',  name: 'Classic' },
@@ -638,7 +640,9 @@ function avatarHtml(rating, url, small, kind, name) {
     initials + '</span>';
 }
 
+// 3 up to 1100, 5 for 1200-1400, 7 for 1600-1900, 10 against Anand.
 function pipAllowance(rating) {
+  if (rating >= 2700) return 10;
   if (rating >= 1600) return 7;
   if (rating >= 1200) return 5;
   return 3;
@@ -652,7 +656,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.21';
+var BUILD = '2026-08-29.22';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -1181,7 +1185,8 @@ function renderPips() {
   [['coachPips', coachLeft], ['tbPips', tbLeft]].forEach(function (p) {
     var box = $(p[0]);
     box.innerHTML = '';
-    box.classList.toggle('many', pipTotal > 5);
+    box.classList.toggle('many', pipTotal > 5 && pipTotal <= 7);
+    box.classList.toggle('lots', pipTotal > 7);
     for (var i = 0; i < pipTotal; i++) {
       var d = document.createElement('span');
       d.className = 'pip' + (i >= p[1] ? ' spent' : '');
