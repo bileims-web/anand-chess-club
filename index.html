@@ -7,7 +7,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" href="icons/favicon.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<meta name="theme-color" content="#1C212A">
+<meta name="theme-color" content="#000000">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Anand Chess">
@@ -15,42 +15,43 @@
      Stockfish needs them for WASM threads. Reloads the page once on first visit. -->
 <script src="coi-serviceworker.js"></script>
 <style>
-  :root { --brass: #C08A3E; }
+  /* The page is black in every theme; a theme colours only the board and pieces. */
+  :root { --brass: #C08A3E; --bg:#000000; }
   body[data-theme="slate"] {
-    --bg:#14171C; --dark:#55606E; --light:#D8CEBD;
+    --dark:#55606E; --light:#D8CEBD;
     --pw:#F0E9DC; --pb:#262B33; --pb-line:rgba(255,255,255,.20);
   }
   body[data-theme="dusk"] {
-    --bg:#1C212A; --dark:#5A6472; --light:#AFAA9C;
+    --dark:#5A6472; --light:#AFAA9C;
     --pw:#D6D2C8; --pb:#272C35; --pb-line:rgba(255,255,255,.18);
   }
   body[data-theme="night"] {
-    --bg:#08090B; --dark:#000000; --light:#474C53;
+    --dark:#000000; --light:#474C53;
     --pw:#B2AEA6; --pb:#2E3238; --pb-line:rgba(178,174,166,.75);
   }
   body[data-theme="sage"] {
-    --bg:#1E241F; --dark:#5B6A5C; --light:#AFB39F;
+    --dark:#5B6A5C; --light:#AFB39F;
     --pw:#D5D6C7; --pb:#29312A; --pb-line:rgba(255,255,255,.18);
   }
-  /* Brighter boards. The page stays dark so the app chrome is unchanged. */
+  /* Brighter boards. */
   body[data-theme="maple"] {
-    --bg:#1E1B16; --dark:#C4762F; --light:#E8CFA4;
+    --dark:#C4762F; --light:#E8CFA4;
     --pw:#FFFDF7; --pb:#2A2118; --pb-line:rgba(0,0,0,.55);
   }
   body[data-theme="walnut"] {
-    --bg:#1C1713; --dark:#8B5A3C; --light:#D9C0A0;
+    --dark:#8B5A3C; --light:#D9C0A0;
     --pw:#FFFCF6; --pb:#241B15; --pb-line:rgba(0,0,0,.5);
   }
   body[data-theme="marble"] {
-    --bg:#1A1D20; --dark:#8E9AA3; --light:#DCDCD4;
+    --dark:#8E9AA3; --light:#DCDCD4;
     --pw:#FFFFFF; --pb:#232830; --pb-line:rgba(0,0,0,.45);
   }
   body[data-theme="blue"] {
-    --bg:#171B1F; --dark:#6F8CA8; --light:#DEE3E6;
+    --dark:#6F8CA8; --light:#DEE3E6;
     --pw:#FFFFFF; --pb:#1F2833; --pb-line:rgba(0,0,0,.45);
   }
   body[data-theme="green"] {
-    --bg:#171A15; --dark:#769656; --light:#EEEED2;
+    --dark:#769656; --light:#EEEED2;
     --pw:#FFFFFF; --pb:#20261C; --pb-line:rgba(0,0,0,.45);
   }
   /* Wood grain: faint enough to read as texture, never as pattern. */
@@ -672,7 +673,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.23';
+var BUILD = '2026-08-29.24';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
