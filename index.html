@@ -25,6 +25,45 @@
     --bg:#1E241F; --dark:#5B6A5C; --light:#AFB39F;
     --pw:#D5D6C7; --pb:#29312A; --pb-line:rgba(255,255,255,.18);
   }
+  /* Brighter boards. The page stays dark so the app chrome is unchanged. */
+  body[data-theme="maple"] {
+    --bg:#1E1B16; --dark:#C4762F; --light:#E8CFA4;
+    --pw:#FFFDF7; --pb:#2A2118; --pb-line:rgba(0,0,0,.55);
+  }
+  body[data-theme="walnut"] {
+    --bg:#1C1713; --dark:#8B5A3C; --light:#D9C0A0;
+    --pw:#FFFCF6; --pb:#241B15; --pb-line:rgba(0,0,0,.5);
+  }
+  body[data-theme="marble"] {
+    --bg:#1A1D20; --dark:#8E9AA3; --light:#DCDCD4;
+    --pw:#FFFFFF; --pb:#232830; --pb-line:rgba(0,0,0,.45);
+  }
+  body[data-theme="blue"] {
+    --bg:#171B1F; --dark:#6F8CA8; --light:#DEE3E6;
+    --pw:#FFFFFF; --pb:#1F2833; --pb-line:rgba(0,0,0,.45);
+  }
+  body[data-theme="green"] {
+    --bg:#171A15; --dark:#769656; --light:#EEEED2;
+    --pw:#FFFFFF; --pb:#20261C; --pb-line:rgba(0,0,0,.45);
+  }
+  /* Wood grain: faint enough to read as texture, never as pattern. */
+  body[data-theme="maple"] .sq, body[data-theme="walnut"] .sq {
+    background-image:
+      repeating-linear-gradient(91deg,
+        rgba(0,0,0,.05) 0 1px, rgba(255,255,255,.028) 1px 3px,
+        rgba(0,0,0,0) 3px 7px, rgba(0,0,0,.032) 7px 8px),
+      repeating-linear-gradient(2deg,
+        rgba(0,0,0,.022) 0 6px, rgba(0,0,0,0) 6px 17px);
+  }
+  /* Unicode pieces need an edge of their own on the bright boards. */
+  body[data-theme="maple"] .piece.w > span,
+  body[data-theme="walnut"] .piece.w > span,
+  body[data-theme="marble"] .piece.w > span,
+  body[data-theme="blue"] .piece.w > span,
+  body[data-theme="green"] .piece.w > span {
+    text-shadow: -1px 0 0 rgba(0,0,0,.6), 1px 0 0 rgba(0,0,0,.6),
+                 0 -1px 0 rgba(0,0,0,.6), 0 1px 0 rgba(0,0,0,.6);
+  }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin:0; height:100%; }
   body {
@@ -110,8 +149,8 @@
   #marks, #hints { pointer-events: none; }
   #pieces { pointer-events: none; }
   .sq, .mark, .hint, .piece { position: absolute; width: 12.5%; height: 12.5%; }
-  .sq.l { background: var(--light); }
-  .sq.d { background: var(--dark); }
+  .sq.l { background-color: var(--light); }
+  .sq.d { background-color: var(--dark); }
   .mark.last { background: rgba(192,138,62,.28); }
   .mark.sel  { box-shadow: inset 0 0 0 2px var(--brass); }
   .mark.chk  { background: radial-gradient(circle, rgba(205,62,50,.6), rgba(205,62,50,0) 72%); }
@@ -130,6 +169,8 @@
   .piece.drag { transition: none; z-index: 10; }
   .piece.gone { opacity: 0; }
   .piece > span { display: block; }
+  .piece > span.svgp { width: 100%; height: 100%; line-height: 0; }
+  .piece > span.svgp svg { width: 100%; height: 100%; display: block; }
   .piece > span.shake { animation: shake 260ms ease-in-out; }
   @keyframes shake {
     0%, 100% { transform: translateX(0); }
@@ -177,6 +218,52 @@
     color: color-mix(in srgb, var(--pw) 55%, transparent);
   }
   .gametabs button:disabled { opacity: .35; cursor: default; }
+
+  .gear {
+    font-size: 20px; padding: 2px 10px; line-height: 1;
+    color: color-mix(in srgb, var(--pw) 55%, transparent);
+  }
+  #ladder { position: relative; }
+  #ladder .gear { position: absolute; top: 14px; right: 14px; }
+
+  #settings { position: fixed; inset: 0; z-index: 60; }
+  .sheetbg { position: absolute; inset: 0; background: rgba(0,0,0,.5); }
+  .sheet {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    max-height: 82%; overflow-y: auto;
+    background: var(--bg); border-top: 1.5px solid var(--brass);
+    border-radius: 16px 16px 0 0; padding: 4px 16px calc(20px + env(safe-area-inset-bottom));
+    animation: sheetUp 220ms ease-out;
+  }
+  @keyframes sheetUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+  .sheethead {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 2px 6px; font-family: Georgia, serif; font-size: 17px;
+  }
+  .sheethead button { font-size: 17px; padding: 6px 10px; color: color-mix(in srgb, var(--pw) 60%, transparent); }
+  .sheetlab {
+    margin: 14px 2px 8px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase;
+    color: color-mix(in srgb, var(--pw) 45%, transparent);
+  }
+  .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 10px; }
+  .swatch {
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    padding: 8px 4px; border-radius: 10px; font-size: 12px;
+    border: 1.5px solid color-mix(in srgb, var(--pw) 12%, transparent);
+    color: color-mix(in srgb, var(--pw) 65%, transparent);
+  }
+  .swatch.on { border-color: var(--brass); color: var(--brass); }
+  .swatch .mini { display: grid; grid-template-columns: 1fr 1fr; width: 44px; height: 44px; border-radius: 5px; overflow: hidden; }
+  .swatch .mini i { display: block; }
+  .swatch .pc { width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; }
+  .swatch .pc svg { width: 100%; height: 100%; }
+  .swatch .pc span { font-size: 30px; line-height: 1; color: var(--pw); }
+  .sheetfoot { margin-top: 20px; display: flex; justify-content: center; }
+  .sheetfoot button {
+    font-size: 13px; padding: 8px 16px; border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--pw) 20%, transparent);
+    color: color-mix(in srgb, var(--pw) 60%, transparent);
+  }
 
   #card, #offer, #startDlg {
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
@@ -288,7 +375,7 @@
 <body data-theme="dusk">
 
 <section id="ladder">
-  <div class="themes" id="themes"></div>
+  <button class="gear" id="gearLadder" aria-label="Settings">&#9881;</button>
   <h1>Anand Chess Club</h1>
   <p class="sub">Beat a member to meet the next one.</p>
   <div id="rows"></div>
@@ -306,7 +393,7 @@
   <div class="topbar">
     <button id="back" aria-label="Back to ladder">&#8249;</button>
     <div class="who"><span class="nm" id="oppName"></span><span class="rt" id="oppRt"></span></div>
-    <div class="sp"></div>
+    <button class="gear" id="gearGame" aria-label="Settings">&#9881;</button>
   </div>
   <div id="board">
     <div id="squares"></div>
@@ -370,6 +457,25 @@
   </div>
 </section>
 
+<div id="settings" class="hidden">
+  <div class="sheetbg" id="sheetBg"></div>
+  <div class="sheet">
+    <div class="sheethead">
+      <span>Appearance</span>
+      <button id="sheetClose" aria-label="Close">&#10005;</button>
+    </div>
+    <div class="sheetbody">
+      <p class="sheetlab">Board</p>
+      <div class="swatches" id="themeSwatches"></div>
+      <p class="sheetlab">Pieces</p>
+      <div class="swatches" id="pieceSwatches"></div>
+      <div class="sheetfoot">
+        <button id="forgetKeyBtn">Forget API key</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="startDlg" class="hidden">
   <div class="cardbox">
     <h2 id="startTitle"></h2>
@@ -412,6 +518,7 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+<script src="pieces.js"></script>
 <script>
 'use strict';
 
@@ -429,8 +536,42 @@ var LEVELS = [
   { name: 'The Champion',    rating: 1900 }
 ];
 var MEAN_GIRL = { name: 'Anand', rating: 2400, offLadder: true };
-var THEMES = ['slate', 'dusk', 'night', 'sage'];
 var GLYPH = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
+var PIECE_CHOICES = [
+  { id: 'classic',  name: 'Classic' },
+  { id: 'merida',   name: 'Merida' },
+  { id: 'cburnett', name: 'Cburnett' },
+  { id: 'chessnut', name: 'Chessnut' }
+];
+var THEME_CHOICES = [
+  { id: 'slate',  name: 'Slate',  light: '#D8CEBD', dark: '#55606E' },
+  { id: 'dusk',   name: 'Dusk',   light: '#AFAA9C', dark: '#5A6472' },
+  { id: 'night',  name: 'Night',  light: '#474C53', dark: '#000000' },
+  { id: 'sage',   name: 'Sage',   light: '#AFB39F', dark: '#5B6A5C' },
+  { id: 'maple',  name: 'Maple',  light: '#E8CFA4', dark: '#C4762F' },
+  { id: 'walnut', name: 'Walnut', light: '#D9C0A0', dark: '#8B5A3C' },
+  { id: 'marble', name: 'Marble', light: '#DCDCD4', dark: '#8E9AA3' },
+  { id: 'blue',   name: 'Blue',   light: '#DEE3E6', dark: '#6F8CA8' },
+  { id: 'green',  name: 'Green',  light: '#EEEED2', dark: '#769656' }
+];
+function isTheme(id) {
+  for (var i = 0; i < THEME_CHOICES.length; i++) if (THEME_CHOICES[i].id === id) return true;
+  return false;
+}
+function isPieceSet(id) {
+  for (var i = 0; i < PIECE_CHOICES.length; i++) if (PIECE_CHOICES[i].id === id) return true;
+  return false;
+}
+var pieceSet = 'classic';
+
+// The single source of truth for piece artwork, used by the playing board
+// and the review board alike. Falls back to the glyph if a set is missing.
+function setPieceGlyph(el, type, color) {
+  var art = pieceSet !== 'classic' && typeof PIECE_SETS !== 'undefined' &&
+    PIECE_SETS[pieceSet] && PIECE_SETS[pieceSet][(color === 'w' ? 'w' : 'b') + type.toUpperCase()];
+  if (art) el.innerHTML = '<span class="svgp">' + art + '</span>';
+  else el.innerHTML = '<span>' + GLYPH[type] + '</span>';
+}
 var progress = 0;          // ladder levels beaten (memory only)
 var game = null;           // chess.js instance
 var opp = null;            // current opponent
@@ -449,7 +590,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.11';
+var BUILD = '2026-08-29.12';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -471,15 +612,61 @@ var FILES = 'abcdefgh';
 function buzz() { if (navigator.vibrate) navigator.vibrate(10); }
 
 // ---------- Themes ----------
-function renderThemes() {
-  var box = $('themes');
-  box.innerHTML = '';
-  THEMES.forEach(function (t) {
+function openSettings() {
+  $('settings').classList.remove('hidden');
+  renderSettings();
+}
+function closeSettings() { $('settings').classList.add('hidden'); }
+
+// Re-draw whichever board is on screen, so a change is visible behind the sheet.
+function applyAppearance() {
+  if (game && !$('gameScr').classList.contains('hidden')) { rebuildPieces(); setMarks(); }
+  if (!$('reviewScr').classList.contains('hidden') && curReview) renderReview();
+}
+
+function renderSettings() {
+  var tb = $('themeSwatches');
+  tb.innerHTML = '';
+  THEME_CHOICES.forEach(function (t) {
     var b = document.createElement('button');
-    b.className = 'chip' + (document.body.dataset.theme === t ? ' on' : '');
-    b.textContent = t.charAt(0).toUpperCase() + t.slice(1);
-    b.onclick = function () { document.body.dataset.theme = t; renderThemes(); saveState(); };
-    box.appendChild(b);
+    b.className = 'swatch' + (document.body.dataset.theme === t.id ? ' on' : '');
+    b.innerHTML =
+      '<span class="mini">' +
+        '<i style="background:' + t.light + '"></i><i style="background:' + t.dark + '"></i>' +
+        '<i style="background:' + t.dark + '"></i><i style="background:' + t.light + '"></i>' +
+      '</span>' + t.name;
+    b.onclick = function () {
+      document.body.dataset.theme = t.id;
+      saveState();
+      renderSettings();
+      applyAppearance();
+    };
+    tb.appendChild(b);
+  });
+
+  var pb = $('pieceSwatches');
+  pb.innerHTML = '';
+  PIECE_CHOICES.forEach(function (pc) {
+    var b = document.createElement('button');
+    b.className = 'swatch' + (pieceSet === pc.id ? ' on' : '');
+    var art = pc.id !== 'classic' && typeof PIECE_SETS !== 'undefined' &&
+      PIECE_SETS[pc.id] && PIECE_SETS[pc.id].wN;
+    b.innerHTML = '<span class="pc">' + (art || '<span>' + GLYPH.n + '</span>') + '</span>' + pc.name;
+    b.onclick = function () {
+      pieceSet = pc.id;
+      saveState();
+      renderSettings();
+      applyAppearance();
+    };
+    pb.appendChild(b);
+  });
+}
+
+function forgetApiKey() {
+  idbDelete('claude-api-key').catch(function () {}).then(function () {
+    var b = $('forgetKeyBtn');
+    b.textContent = 'Key forgotten';
+    setTimeout(function () { b.textContent = 'Forget API key'; }, 1800);
   });
 }
 
@@ -537,6 +724,7 @@ function saveState() {
     id: STATE_KEY,
     progress: progress,
     theme: document.body.dataset.theme,
+    pieceSet: pieceSet,
     color: chosenColor,
     coachTier: coachTier,
     reviewTier: reviewTier,
@@ -551,7 +739,8 @@ function loadState() {
     if (typeof st.progress === 'number' && st.progress >= 0) {
       progress = Math.max(progress, Math.min(st.progress, LEVELS.length));
     }
-    if (THEMES.indexOf(st.theme) !== -1) document.body.dataset.theme = st.theme;
+    if (isTheme(st.theme)) document.body.dataset.theme = st.theme;
+    if (isPieceSet(st.pieceSet)) pieceSet = st.pieceSet;
     if (st.color === 'w' || st.color === 'b') chosenColor = st.color;
     if (TIERS.indexOf(st.coachTier) !== -1) coachTier = st.coachTier;
     if (TIERS.indexOf(st.reviewTier) !== -1) reviewTier = st.reviewTier;
@@ -564,7 +753,6 @@ function loadState() {
     return idbGetGames().then(function (g) { gameHistory = g; }).catch(function () {});
   }).then(function () {
     stateLoaded = true;
-    renderThemes();
     renderTiers();
     renderLadder();
     renderSpend();
@@ -645,7 +833,7 @@ function rebuildPieces() {
     if (!pc) continue;
     var el = document.createElement('div');
     el.className = 'piece ' + pc.color;
-    el.innerHTML = '<span>' + GLYPH[pc.type] + '</span>';
+    setPieceGlyph(el, pc.type, pc.color);
     place(el, absName(f, r));
     box.appendChild(el);
     pieceEls[absName(f, r)] = el;
@@ -714,7 +902,7 @@ function animateMove(mv) {
 
   place(el, mv.to);
   pieceEls[mv.to] = el;
-  if (mv.promotion) el.firstChild.textContent = GLYPH[mv.promotion];
+  if (mv.promotion) setPieceGlyph(el, mv.promotion, mv.color);
 
   if (mv.flags.indexOf('k') !== -1 || mv.flags.indexOf('q') !== -1) {  // castling: move the rook
     var rank = mv.from[1];
@@ -2117,7 +2305,7 @@ function renderReviewBoard(fen, lastUci, arrows, badges) {
       if (!isNaN(parseInt(ch, 10))) { file += parseInt(ch, 10); continue; }
       el = document.createElement('div');
       el.className = 'piece ' + (ch === ch.toUpperCase() ? 'w' : 'b');
-      el.innerHTML = '<span>' + GLYPH[ch.toLowerCase()] + '</span>';
+      setPieceGlyph(el, ch.toLowerCase(), ch === ch.toUpperCase() ? 'w' : 'b');
       place(el, absName(file, r));
       box.appendChild(el);
       file++;
@@ -2640,7 +2828,6 @@ function toLadder() {
 
 // ---------- Wire up ----------
 buildSquares();
-renderThemes();
 renderTiers();
 renderLadder();
 loadState();
@@ -2656,6 +2843,11 @@ $('ladderBtn').onclick = toLadder;
 $('rematchBtn').onclick = function () { startGame(opp, oppIndex); };
 $('coachBtn').onclick = useCoach;
 $('tbBtn').onclick = useTakeback;
+$('gearLadder').onclick = openSettings;
+$('gearGame').onclick = openSettings;
+$('sheetClose').onclick = closeSettings;
+$('sheetBg').onclick = closeSettings;
+$('forgetKeyBtn').onclick = forgetApiKey;
 $('resumeBtn').onclick = resumeGame;
 $('startWhite').onclick = function () { startChosen('w'); };
 $('startBlack').onclick = function () { startChosen('b'); };
