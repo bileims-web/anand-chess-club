@@ -350,13 +350,6 @@
   .lab-missed  { color: #FF7769; }
   .toolrow { display: flex; align-items: center; gap: 8px; }
   .toolrow .tool { flex: 1; min-width: 0; }
-  .tiertoggle { display: inline-flex; gap: 4px; flex: none; }
-  .tiertoggle button {
-    font-size: 11px; padding: 5px 9px; border-radius: 999px; white-space: nowrap;
-    border: 1px solid color-mix(in srgb, var(--pw) 15%, transparent);
-    color: color-mix(in srgb, var(--pw) 45%, transparent);
-  }
-  .tiertoggle button.on { border-color: var(--brass); color: var(--brass); }
   .rvarrowwrap { position: absolute; inset: 0; pointer-events: none; }
   .rvarrows { width: 100%; height: 100%; display: block; overflow: visible; }
   .rvplay { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 8px 0 10px; }
@@ -381,14 +374,6 @@
     color: color-mix(in srgb, var(--pw) 45%, transparent); }
   .hrow .hres { font-size: 13px; font-weight: 600; }
   .hres.win { color: #55B85F; } .hres.loss { color: #D9534F; } .hres.draw { color: var(--brass); }
-  .rvtoggle { display: flex; align-items: center; gap: 8px; justify-content: center; margin: 2px 0 8px; }
-  .tiers { margin: 26px 0 0; }
-  .tierrow { display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 8px; }
-  .tierrow span[id] { display: inline-flex; gap: 8px; }
-  .tierlab {
-    width: 56px; text-align: right; font-size: 12px;
-    color: color-mix(in srgb, var(--pw) 45%, transparent);
-  }
   .spend {
     text-align: center; font-size: 12px; margin: 18px 0 0;
     color: color-mix(in srgb, var(--pw) 35%, transparent);
@@ -431,7 +416,6 @@
   <div class="tools">
     <div class="toolrow">
       <button class="tool" id="coachBtn">Coach <span class="pips" id="coachPips"></span></button>
-      <span class="tiertoggle" id="coachTierToggle"></span>
     </div>
     <button class="tool" id="tbBtn">Takeback <span class="pips" id="tbPips"></span></button>
   </div>
@@ -471,10 +455,6 @@
         <button id="rvPrev" aria-label="Previous move">&#9664;</button>
         <button id="rvNext" aria-label="Next move">&#9654;</button>
         <span id="rvPlyTxt"></span>
-      </div>
-      <div class="rvtoggle">
-        <span class="tierlab">Explained by</span>
-        <span class="tiertoggle" id="rvTierToggle"></span>
       </div>
       <div id="rvExplain"></div>
     </div>
@@ -674,7 +654,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.36';
+var BUILD = '2026-08-29.37';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -754,50 +734,6 @@ function forgetApiKey() {
   });
 }
 
-// Casual vs professional: the same facts, written with more or less care.
-function renderTierChips(boxId, current, pick) {
-  var box = $(boxId);
-  box.innerHTML = '';
-  TIERS.forEach(function (t) {
-    var b = document.createElement('button');
-    b.className = current === t ? 'on' : '';
-    b.textContent = t.charAt(0).toUpperCase() + t.slice(1);
-    b.onclick = function () { pick(t); };
-    box.appendChild(b);
-  });
-}
-
-function renderTiers() {
-  renderTierChips('coachTierToggle', coachTier, setCoachTier);
-  renderTierChips('rvTierToggle', reviewTier, setReviewTier);
-}
-
-function setCoachTier(t) {
-  if (coachTier === t) return;
-  coachTier = t;
-  renderTiers();
-  saveState();
-  // Already paid a pip for this position? Then the other opinion is free.
-  var fen = game && !over ? game.fen() : null;
-  if (fen && coachedFens[fen]) showCoachForTier(fen);
-}
-
-function setReviewTier(t) {
-  if (reviewTier === t) return;
-  reviewTier = t;
-  renderTiers();
-  saveState();
-  // Picking a tier is also the retry gesture: a tier that failed before
-  // (key prompt cancelled, no internet) gets a fresh attempt.
-  if (curReview) {
-    curReview.moves.forEach(function (m) {
-      if (m.exErrors && m.exErrors[t]) delete m.exErrors[t];
-    });
-  }
-  renderReviewIfVisible();   // cached tiers switch instantly
-  ensureExplanations();      // fetch whatever this tier is missing
-}
-
 // ---------- Persisted state ----------
 // Ladder progress and preferences, kept in the same IndexedDB the models
 // use. Device-local: nothing here is ever sent anywhere.
@@ -817,8 +753,6 @@ function saveState() {
     theme: document.body.dataset.theme,
     pieceSet: pieceSet,
     color: chosenColor,
-    coachTier: coachTier,
-    reviewTier: reviewTier,
     spendTotal: spendTotal
   }).catch(function () {});   // private mode / quota: play on unsaved
 }
@@ -833,8 +767,6 @@ function loadState() {
     if (isTheme(st.theme)) document.body.dataset.theme = st.theme;
     if (isPieceSet(st.pieceSet)) pieceSet = st.pieceSet;
     if (st.color === 'w' || st.color === 'b') chosenColor = st.color;
-    if (TIERS.indexOf(st.coachTier) !== -1) coachTier = st.coachTier;
-    if (TIERS.indexOf(st.reviewTier) !== -1) reviewTier = st.reviewTier;
     if (typeof st.spendTotal === 'number' && isFinite(st.spendTotal)) {
       spendTotal += st.spendTotal;   // add, in case a call already billed
     }
@@ -844,7 +776,6 @@ function loadState() {
     return idbGetGames().then(function (g) { gameHistory = g; }).catch(function () {});
   }).then(function () {
     stateLoaded = true;
-    renderTiers();
     renderLadder();
     renderSpend();
     // Reopening the app puts you back in the game you were playing, rather
@@ -1227,15 +1158,23 @@ function renderPips() {
 // Anand's net proposes his sharper move; if they differ, his move is
 // measured by Stockfish and the gap stated in win percentage. One Claude
 // call writes both voices. Everything is cached by FEN.
-var COACH_SYSTEM =
-  'You explain chess to a beginner rated around 1000. Stockfish is the ' +
-  'authority on what is true — you are only translating it. Never invent a ' +
-  'move, line, or tactic that is not in the data given to you. No engine ' +
-  'numbers in your answer. Two to three sentences per voice. Plain language.\n' +
+// How the app explains things — one voice, shared by the Coach and the
+// game review. Task-specific rules stay with each task's own prompt.
+var STYLE_SYSTEM =
+  'You explain chess in friendly plain language to a player rated around ' +
+  '1000. No jargon and no engine numbers in your answer. Stockfish is ' +
+  'the authority on what is true — you are only translating it. Never ' +
+  'invent a move, line, or tactic that is not in the data given to you. ' +
+  'Always be clear whose piece is whose; never call an opponent’s piece ' +
+  '"yours". When the opponent has more than one reasonable reply, say ' +
+  '"if" ("if Black blocks with g6…"), not "must" — unless it is ' +
+  'genuinely the only legal or only sensible move.';
+
+var COACH_SYSTEM = STYLE_SYSTEM + '\n' +
+  'Two to three sentences per voice.\n' +
   'Anand’s move has been measured by Stockfish. If it is worse, say plainly ' +
   'that it is worse and roughly what it costs. Never present a losing move as ' +
-  'merely interesting.\n' +
-  'Always be clear whose piece is whose; never call an opponent’s piece "yours".';
+  'merely interesting.';
 
 // The prose comes back with the squares that matter, in one response.
 // The moves themselves are the engines' and are never sent back by the model.
@@ -1556,10 +1495,12 @@ function coachPayload(d) {
 // Two coaching tiers, selectable per surface. The senior thinks harder and
 // costs more; the junior is quicker and cheaper. Both are handed exactly the
 // same Stockfish facts, so this only changes how the advice is written.
-var TIERS = ['casual', 'professional'];
-var TIER_MODELS = { casual: 'claude-sonnet-5', professional: 'claude-opus-4-6' };
-var coachTier = 'casual';         // live: must answer while you wait at the board
-var reviewTier = 'professional';  // read at leisure after the game
+var EXPLAIN_MODEL = 'claude-sonnet-5';
+// Explanations were once stored per style tier; saved reviews may still
+// hold their text under the old keys. One style now: write 'std', read any.
+var EX_KEY = 'std';
+function exText(m) { return m.explanations[EX_KEY] || m.explanations.professional || m.explanations.casual; }
+function exError(m) { return m.exErrors[EX_KEY] || m.exErrors.professional || m.exErrors.casual; }
 
 // Published rates, dollars per million tokens (input / output).
 var MODEL_RATES = {
@@ -1586,7 +1527,7 @@ function coachAsk(payload, key, system, model, onCost) {
       'anthropic-dangerous-direct-browser-access': 'true'
     },
     body: JSON.stringify({
-      model: model || TIER_MODELS[coachTier],
+      model: model || EXPLAIN_MODEL,
       max_tokens: 400,
       system: system || COACH_SYSTEM,
       messages: [{ role: 'user', content: payload }]
@@ -1611,7 +1552,7 @@ function coachAsk(payload, key, system, model, onCost) {
       throw new Error('Claude API error ' + res.status + apiMsg);
     });
   }).then(function (j) {
-    var cost = askCost(model || TIER_MODELS[coachTier], j.usage);
+    var cost = askCost(model || EXPLAIN_MODEL, j.usage);
     spendTotal += cost;
     saveState();
     if (onCost) onCost(cost);
@@ -1771,17 +1712,16 @@ function coachShow(fen, payload) {
   });
 }
 
-// A pip buys the position, not one opinion of it: once you have spent it,
-// flipping the toggle shows the other view of the same position for free.
-function showCoachForTier(fen) {
-  var ck = fen + '|' + coachTier;
+// A pip buys the position: once spent, asking again is free.
+function showCoachAnswer(fen) {
+  var ck = fen;
   if (coachText[ck]) { coachShow(fen, coachText[ck]); return Promise.resolve(); }
   if (coachBusy) return Promise.resolve();
   coachBusy = true;
   return getCoachKey().then(function (key) {
     coachSpinner(true);
     return coachEngineData(fen).then(function (d) {
-      return coachAsk(coachPayload(d), key, null, TIER_MODELS[coachTier]).then(function (txt) {
+      return coachAsk(coachPayload(d), key).then(function (txt) {
         var parsed = parseCoachReply(txt, d);
         coachText[ck] = parsed;          // cached: switching voices never re-asks
         coachSpinner(false);
@@ -1802,8 +1742,8 @@ function showCoachForTier(fen) {
 function useCoach() {
   if (over || game.turn() !== playerColor || aiTimer || coachBusy) return;
   var fen = game.fen();
-  if (coachText[fen + '|' + coachTier]) {          // already asked, this view
-    coachShow(fen, coachText[fen + '|' + coachTier]);
+  if (coachText[fen]) {                            // already asked here
+    coachShow(fen, coachText[fen]);
     return;
   }
   var paid = !!coachedFens[fen];                   // pip already spent here
@@ -1814,7 +1754,7 @@ function useCoach() {
     renderPips();
     saveGame();
   }
-  showCoachForTier(fen).catch(function () {
+  showCoachAnswer(fen).catch(function () {
     if (!paid) {                                   // nothing produced: refund
       coachLeft++;
       delete coachedFens[fen];
@@ -1829,20 +1769,16 @@ function useCoach() {
 // decision points, MultiPV 1 on the replies for the before/after win
 // probabilities). Moves classified on win probability; flagged moves get
 // one Claude explanation each. Everything cached with the game in memory.
-var REVIEW_SYSTEM =
-  'You explain chess to a beginner rated around 1000. Stockfish is the ' +
-  'authority on what is true — you are only translating it. Never invent a ' +
-  'move, line, or tactic that is not in the data given to you. No engine ' +
-  'numbers in your answer. Two to three sentences. Plain language.\n' +
-  'Always be clear whose piece is whose; never call an opponent’s piece "yours".\n' +
+var REVIEW_SYSTEM = STYLE_SYSTEM + '\n' +
+  'You are reviewing one move from a finished game. Two to three sentences.\n' +
   'Narrate only the FIRST TWO OR THREE MOVES of the engine line you are ' +
   'given. If the point only arrives many moves later, do not tell that ' +
   'story — say what the move achieves immediately ("it checks the king ' +
   'and forces it to move, keeping the initiative") and stop. Never ' +
   'mention a capture, piece, or square that does not appear in the moves ' +
-  'you are narrating. Account for the opponent’s replies in them: never ' +
-  'say a capture is "free" or that it "wins a piece" unless those moves ' +
-  'show no recapture; if material is traded, say so.\n' +
+  'you are narrating. Never say a capture is "free" or that it "wins a ' +
+  'piece" unless those moves show no recapture; if material is traded, ' +
+  'say so.\n' +
   'You are given the material balance before and after the narrated ' +
   'moves. Never claim a material gain unless the numbers show one. If ' +
   'material does not change, say the move is good for position or safety ' +
@@ -1850,11 +1786,8 @@ var REVIEW_SYSTEM =
   'If you cannot explain the move in two or three sentences using only ' +
   'the first few moves, say plainly that the reason is long-winded and ' +
   'just state what the move does. Do not improvise a story.\n' +
-  'When the opponent has more than one reasonable reply, do not say they ' +
-  '"must" play something. Say "if" instead — "if Black blocks with g6…" — ' +
-  'unless it is genuinely the only legal or only sensible move. You are ' +
-  'told for each opponent reply in the line whether it is forced; treat ' +
-  'any reply that is not forced as an "if".';
+  'You are told for each opponent reply in the line whether it is ' +
+  'forced; treat any reply that is not forced as an "if".';
 
 var RV_LABELS = {
   missed:     { sym: '✗',  txt: 'Missed chance', cls: 'lab-missed',  flag: true },
@@ -2110,7 +2043,7 @@ function ensureExplanations() {
   if (rv.exBusy) { rv.exAgain = true; return; }
   if (rv.status !== 'done') return;
   var missing = rv.moves.some(function (m) {
-    return m.flagged && !m.explanations[reviewTier] && !m.exErrors[reviewTier];
+    return m.flagged && !exText(m) && !exError(m);
   });
   if (!missing) { renderReviewIfVisible(); return; }
   rv.exBusy = true;
@@ -2124,12 +2057,11 @@ function ensureExplanations() {
   });
 }
 
-// Writes the explanations missing for the tier now selected. Switching tiers
-// re-asks only the flagged moves; the Stockfish analysis is never redone.
+// Writes the explanations still missing; only the flagged moves are
+// asked, and the Stockfish analysis is never redone.
 function runExplanations(rv) {
-  var tier = reviewTier;
   var flagged = rv.moves.filter(function (m) {
-    return m.flagged && !m.explanations[tier] && !m.exErrors[tier];
+    return m.flagged && !exText(m) && !exError(m);
   });
   rv.exTotal = flagged.length;
   rv.exDone = 0;
@@ -2139,11 +2071,11 @@ function runExplanations(rv) {
     var chain = Promise.resolve();
     flagged.forEach(function (m) {
       chain = chain.then(function () {
-        return coachAsk(reviewPayload(m), key, REVIEW_SYSTEM, TIER_MODELS[tier], function (c) {
+        return coachAsk(reviewPayload(m), key, REVIEW_SYSTEM, EXPLAIN_MODEL, function (c) {
           rv.cost += c;
         }).then(
-          function (txt) { m.explanations[tier] = txt; },
-          function (err) { m.exErrors[tier] = err.message; }
+          function (txt) { m.explanations[EX_KEY] = txt; },
+          function (err) { m.exErrors[EX_KEY] = err.message; }
         );
       }).then(function () {
         rv.exDone++;
@@ -2153,7 +2085,7 @@ function runExplanations(rv) {
     });
     return chain;
   }, function (keyErr) {
-    flagged.forEach(function (m) { m.exErrors[tier] = keyErr.message; });
+    flagged.forEach(function (m) { m.exErrors[EX_KEY] = keyErr.message; });
   });
 }
 
@@ -2614,8 +2546,8 @@ function renderRvDetail(rv) {
     ' (' + RV_LABELS[m.label].txt + '). Best: ' + m.bestSan + '.';
   var body = '';
   if (m.flagged) {
-    if (m.explanations[reviewTier]) body = 'Anand: ' + m.explanations[reviewTier];
-    else if (m.exErrors[reviewTier]) body = '(No explanation — ' + m.exErrors[reviewTier] + ')';
+    if (exText(m)) body = 'Anand: ' + exText(m);
+    else if (exError(m)) body = '(No explanation — ' + exError(m) + ')';
     else body = rv.status === 'done' ? '' : '(Anand is writing…)';
   }
   $('rvExplain').innerHTML =
@@ -3109,7 +3041,6 @@ function toLadder() {
 
 // ---------- Wire up ----------
 buildSquares();
-renderTiers();
 renderLadder();
 loadState();
 $('buildTag').textContent = 'build ' + BUILD;
