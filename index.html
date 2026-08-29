@@ -674,7 +674,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.33';
+var BUILD = '2026-08-29.34';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -1266,9 +1266,10 @@ function sanLine(fen, ucis, maxPlies) {
 }
 function sanOf(fen, uci) { return sanLine(fen, [uci], 1); }
 
-// The PV shown to the review coach: SAN, 8 plies but never cut in the
-// middle of a capture sequence, with the material outcome tallied at the
-// end so a "wins a piece" claim can be checked against the actual trades.
+// What the review coach narrates: only the first plies of the PV (three,
+// extended solely through an unfinished trade), with the student's material
+// balance before and after exactly those plies, and the rest of the line
+// passed separately as context that must not be narrated.
 var RV_PIECE_VALUE = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
 function pvWithMaterial(fen, ucis, studentColor) {
   var g = new Chess(fen);
@@ -1281,23 +1282,21 @@ function pvWithMaterial(fen, ucis, studentColor) {
     });
     return d;
   }
-  var startNet = net();
-  var out = [], sawCapture = false;
-  for (var i = 0; i < ucis.length && i < 12; i++) {
+  var before = net();
+  var out = [];
+  for (var i = 0; i < ucis.length && i < 6; i++) {
     var u = ucis[i];
     var mv = g.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u.length > 4 ? u.slice(4) : undefined });
     if (!mv) break;
+    if (out.length >= 3 && !mv.captured) { g.undo(); break; }
     out.push(mv.san);
-    if (mv.captured) sawCapture = true;
-    if (out.length >= 8 && !mv.captured) break;   // run on only through trades
   }
-  var diff = net() - startNet;
-  var note;
-  if (!sawCapture) note = 'No material changes hands in this line.';
-  else if (diff > 0) note = 'The student ends this line UP ' + diff + ' point' + (diff === 1 ? '' : 's') + ' of material.';
-  else if (diff < 0) note = 'The student ends this line DOWN ' + (-diff) + ' point' + (diff === -1 ? '' : 's') + ' of material.';
-  else note = 'Material is EVEN at the end of this line — every capture is answered by a recapture.';
-  return { line: out.join(' '), note: note };
+  return {
+    line: out.join(' '),
+    before: before,
+    after: net(),
+    cont: sanLine(g.fen(), ucis.slice(out.length), 6)
+  };
 }
 
 // "White pieces: Kg1 Qd1 ... | Black pieces: ..." so ownership is explicit.
@@ -1819,11 +1818,21 @@ var REVIEW_SYSTEM =
   'move, line, or tactic that is not in the data given to you. No engine ' +
   'numbers in your answer. Two to three sentences. Plain language.\n' +
   'Always be clear whose piece is whose; never call an opponent’s piece "yours".\n' +
-  'You are given the engine’s full principal variation. Account for the ' +
-  'opponent’s replies in it, not just the first move. Never say a capture ' +
-  'is "free" or that it "wins a piece" unless the line shows no ' +
-  'recapture. If material is traded, say so. If the move is good for ' +
-  'positional reasons rather than material, explain that instead.';
+  'Narrate only the FIRST TWO OR THREE MOVES of the engine line you are ' +
+  'given. If the point only arrives many moves later, do not tell that ' +
+  'story — say what the move achieves immediately ("it checks the king ' +
+  'and forces it to move, keeping the initiative") and stop. Never ' +
+  'mention a capture, piece, or square that does not appear in the moves ' +
+  'you are narrating. Account for the opponent’s replies in them: never ' +
+  'say a capture is "free" or that it "wins a piece" unless those moves ' +
+  'show no recapture; if material is traded, say so.\n' +
+  'You are given the material balance before and after the narrated ' +
+  'moves. Never claim a material gain unless the numbers show one. If ' +
+  'material does not change, say the move is good for position or safety ' +
+  'instead.\n' +
+  'If you cannot explain the move in two or three sentences using only ' +
+  'the first few moves, say plainly that the reason is long-winded and ' +
+  'just state what the move does. Do not improvise a story.';
 
 var RV_LABELS = {
   missed:     { sym: '✗',  txt: 'Missed chance', cls: 'lab-missed',  flag: true },
@@ -1940,7 +1949,9 @@ function buildMoveTable(rv) {
     };
     var pv = pvWithMaterial(rv.fens[k], ev.pvs[0].line.split(' '), rv.color);
     m.bestLine = pv.line;
-    m.bestLineNote = pv.note;
+    m.matBefore = pv.before;
+    m.matAfter = pv.after;
+    m.bestCont = pv.cont;
     m.label = classifyReviewMove(m);
     m.flagged = RV_LABELS[m.label].flag;
     rv.counts[m.label] = (rv.counts[m.label] || 0) + 1;
@@ -1959,9 +1970,23 @@ function reviewPayload(m) {
   lines.push(pieceOwnership(m.fenBefore));
   lines.push('The student (' + (m.color === 'w' ? 'White' : 'Black') + ') played: ' + m.san +
     ' — their win chance went from ' + m.before.toFixed(1) + '% to ' + m.after.toFixed(1) + '%.');
-  lines.push('Stockfish’s best move here: ' + m.bestSan +
-    ' | its full line (SAN, both sides’ moves): ' + m.bestLine +
-    (m.bestLineNote ? ' | ' + m.bestLineNote : ''));
+  var pvLine = 'Stockfish’s best move here: ' + m.bestSan +
+    ' | narrate ONLY these moves (SAN, both sides): ' + m.bestLine;
+  if (typeof m.matBefore === 'number') {
+    var md = m.matAfter - m.matBefore;
+    var fmtNet = function (n) { return (n > 0 ? '+' : '') + n; };
+    pvLine += ' | Student’s material balance (P=1, N/B=3, R=5, Q=9): before these moves ' +
+      fmtNet(m.matBefore) + ', after them ' + fmtNet(m.matAfter) + ' — ' +
+      (md === 0 ? 'no material is gained' :
+        (md > 0 ? 'the student gains ' + md : 'the student LOSES ' + (-md))) + '.';
+  } else if (m.bestLineNote) {
+    pvLine += ' | ' + m.bestLineNote;   // analyses stored by older builds
+  }
+  if (m.bestCont) {
+    pvLine += ' | The line continues ' + m.bestCont +
+      ' — context only: do NOT narrate, quote, or mention anything from it.';
+  }
+  lines.push(pvLine);
   if (m.label === 'missed') {
     lines.push('IMPORTANT: ' + them + '’s previous move (' + m.oppSan + ') was a serious error that ' +
       'raised the student’s win chance by ' + m.oppGain.toFixed(1) + ' points, and the student ' +
@@ -2040,7 +2065,8 @@ function persistReview(rv) {
     return {
       ply: m.ply, san: m.san, uci: m.uci, label: m.label, flagged: m.flagged,
       before: m.before, after: m.after, loss: m.loss,
-      bestUci: m.bestUci, bestSan: m.bestSan, bestLine: m.bestLine, bestLineNote: m.bestLineNote,
+      bestUci: m.bestUci, bestSan: m.bestSan, bestLine: m.bestLine,
+      matBefore: m.matBefore, matAfter: m.matAfter, bestCont: m.bestCont,
       oppSan: m.oppSan, oppGain: m.oppGain,
       explanations: m.explanations, exErrors: m.exErrors
     };
