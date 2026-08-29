@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>Anand Chess Club</title>
+<!-- Cross-origin isolation shim: GitHub Pages can't send COOP/COEP headers, and
+     Stockfish needs them for WASM threads. Reloads the page once on first visit. -->
+<script src="coi-serviceworker.js"></script>
 <style>
   :root { --brass: #C08A3E; }
   body[data-theme="slate"] {
@@ -190,6 +193,8 @@
   </div>
   <div class="tools">
     <button class="tool" id="coachBtn">Coach <span class="pips" id="coachPips"></span></button>
+    <!-- TEMPORARY scaffolding: removed once the real Coach uses the engine. -->
+    <button class="tool" id="sfBtn">SF test</button>
     <button class="tool" id="tbBtn">Takeback <span class="pips" id="tbPips"></span></button>
   </div>
   <div id="status"></div>
@@ -561,6 +566,122 @@ function useTakeback() {
 // ---------- Game flow ----------
 function setStatus(t) { $('status').textContent = t; }
 
+// ---------- Stockfish ----------
+// Engine runs in stockfish.worker.js; nothing here blocks the main thread.
+// Every request carries a timeout so a hung worker can never freeze the board.
+var SF = (function () {
+  var worker = null, nextId = 1, pending = {}, initPromise = null, queue = Promise.resolve();
+  var info = { engine: null, threads: 0 };
+
+  function ensureWorker() {
+    if (worker) return;
+    worker = new Worker('stockfish.worker.js');
+    worker.onmessage = function (e) {
+      var m = e.data || {};
+      var p = pending[m.id];
+      if (!p) return;
+      delete pending[m.id];
+      clearTimeout(p.timer);
+      if (m.ok) p.resolve(m); else p.reject(new Error(m.error || 'engine error'));
+    };
+    worker.onerror = function (e) {
+      var err = new Error(e.message || 'engine worker crashed');
+      Object.keys(pending).forEach(function (id) {
+        clearTimeout(pending[id].timer);
+        pending[id].reject(err);
+        delete pending[id];
+      });
+      try { worker.terminate(); } catch (ignore) {}
+      worker = null;
+      initPromise = null;
+    };
+  }
+
+  function call(msg, timeoutMs) {
+    ensureWorker();
+    return new Promise(function (resolve, reject) {
+      var id = nextId++;
+      msg.id = id;
+      pending[id] = {
+        resolve: resolve,
+        reject: reject,
+        timer: setTimeout(function () {
+          delete pending[id];
+          if (worker) worker.postMessage({ cmd: 'abort', id: id });
+          reject(new Error(msg.cmd + ' timed out'));
+        }, timeoutMs)
+      };
+      worker.postMessage(msg);
+    });
+  }
+
+  // Resolves after the UCI handshake (uciok then readyok) completes in the worker.
+  function init() {
+    if (!initPromise) {
+      initPromise = call({ cmd: 'init' }, 60000).then(function (m) {
+        info.engine = m.engine;
+        info.threads = m.threads;
+        return info;
+      }, function (err) {
+        initPromise = null;
+        throw err;
+      });
+    }
+    return initPromise;
+  }
+
+  // analyse(fen, {depth, multipv, timeout}) -> {bestmove, ponder, pvs, timeMs}
+  // pvs: [{multipv, move, cp, mate, line, depth}], scores from the side to move.
+  // Calls are serialised: the engine searches one position at a time.
+  function analyse(fen, opts) {
+    opts = opts || {};
+    var job = queue.then(function () {
+      return init().then(function () {
+        return call({
+          cmd: 'analyse',
+          fen: fen,
+          depth: opts.depth || 12,
+          multipv: opts.multipv || 1
+        }, opts.timeout || 120000);
+      });
+    });
+    queue = job.then(function () {}, function () {});
+    return job;
+  }
+
+  return { init: init, analyse: analyse, info: info };
+})();
+
+// TEMPORARY scaffolding: prints the engine's verdict to the status line.
+var sfBusy = false;
+function sfTest() {
+  if (sfBusy) return;
+  sfBusy = true;
+  var fen = game.fen();
+  var whiteToMove = game.turn() === 'w';
+  setStatus('SF: loading engine…');
+  SF.init().then(function (inf) {
+    setStatus('SF: thinking (depth 18)…');
+    var t0 = performance.now();
+    return SF.analyse(fen, { depth: 18, multipv: 3 }).then(function (r) {
+      var secs = ((performance.now() - t0) / 1000).toFixed(1);
+      var top = r.pvs[0];
+      var score = '?';
+      if (top && top.mate !== null) {
+        score = '#' + (whiteToMove ? top.mate : -top.mate);
+      } else if (top) {
+        var cp = whiteToMove ? top.cp : -top.cp;
+        score = (cp >= 0 ? '+' : '') + (cp / 100).toFixed(2);
+      }
+      setStatus('SF: best ' + r.bestmove + ' ' + score +
+        ' · d' + (top ? top.depth : 18) + ' · ' + secs + 's · ' +
+        inf.threads + (inf.threads === 1 ? ' thread' : ' threads'));
+    });
+  }).catch(function (err) {
+    setStatus('SF error: ' + err.message);
+  }).then(function () { sfBusy = false; });
+}
+
 function startGame(o, idx) {
   opp = o; oppIndex = idx;
   game = new Chess();
@@ -629,6 +750,7 @@ $('back').onclick = toLadder;
 $('ladderBtn').onclick = toLadder;
 $('rematchBtn').onclick = function () { startGame(opp, oppIndex); };
 $('coachBtn').onclick = useCoach;
+$('sfBtn').onclick = sfTest;
 $('tbBtn').onclick = useTakeback;
 </script>
 </body>
