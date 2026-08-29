@@ -209,6 +209,11 @@
   .lab-great   { color: #55B85F; }
   .lab-best    { color: #7FBF7F; }
   .lab-missed  { color: #B07CE8; }
+  .spend {
+    text-align: center; font-size: 12px; margin: 18px 0 0;
+    color: color-mix(in srgb, var(--pw) 35%, transparent);
+  }
+  .spend:empty { display: none; }
 
   @media (prefers-reduced-motion: reduce) {
     .piece { transition: none; }
@@ -226,6 +231,7 @@
   <button class="row hidden" id="lastReviewBtn">
     <span class="nm">Review last game</span><span class="rt" id="lastReviewOpp"></span>
   </button>
+  <p class="spend" id="ladderSpend"></p>
 </section>
 
 <section id="gameScr" class="hidden">
@@ -265,6 +271,7 @@
       <div id="rvExplain"></div>
     </div>
     <div class="rvmoves" id="rvMoves"></div>
+    <p class="spend" id="rvCost"></p>
   </div>
 </section>
 
@@ -883,7 +890,22 @@ function coachPayload(d) {
 var COACH_MODEL = 'claude-sonnet-5';
 var REVIEW_MODEL = 'claude-opus-4-6';
 
-function coachAsk(payload, key, system, model) {
+// Published rates, dollars per million tokens (input / output).
+var MODEL_RATES = {
+  'claude-sonnet-5': { inp: 2, out: 10 },
+  'claude-opus-4-6': { inp: 5, out: 25 }
+};
+var spendTotal = 0;   // this session only, until progress is persisted
+
+function askCost(model, usage) {
+  var r = MODEL_RATES[model];
+  if (!r || !usage) return 0;
+  return ((usage.input_tokens || 0) * r.inp + (usage.output_tokens || 0) * r.out) / 1e6;
+}
+
+function fmtSpend(v) { return '$' + (v < 1 ? v.toFixed(4) : v.toFixed(2)); }
+
+function coachAsk(payload, key, system, model, onCost) {
   return fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -918,6 +940,9 @@ function coachAsk(payload, key, system, model) {
       throw new Error('Claude API error ' + res.status + apiMsg);
     });
   }).then(function (j) {
+    var cost = askCost(model || COACH_MODEL, j.usage);
+    spendTotal += cost;
+    if (onCost) onCost(cost);
     var txt = (j.content || []).filter(function (c) { return c.type === 'text'; })
       .map(function (c) { return c.text; }).join(' ').trim();
     if (!txt) throw new Error('empty reply');
@@ -1034,7 +1059,7 @@ function createReview(rec) {
     moves: [],            // one entry per student (White) move
     counts: {},
     status: 'pending', done: 0, total: fens.length - 1,
-    exDone: 0, exTotal: 0, error: null
+    exDone: 0, exTotal: 0, error: null, cost: 0
   };
 }
 
@@ -1164,7 +1189,9 @@ function runExplanations(rv) {
     var chain = Promise.resolve();
     flagged.forEach(function (m) {
       chain = chain.then(function () {
-        return coachAsk(reviewPayload(m), key, REVIEW_SYSTEM, REVIEW_MODEL).then(
+        return coachAsk(reviewPayload(m), key, REVIEW_SYSTEM, REVIEW_MODEL, function (c) {
+          rv.cost += c;
+        }).then(
           function (txt) { m.explanation = txt; },
           function (err) { m.exError = err.message; }
         );
@@ -1229,6 +1256,10 @@ function renderReview() {
   renderRvGraph(rv);
   renderRvMoves(rv);
   renderRvDetail(rv);
+  var parts = [];
+  if (rv.cost) parts.push('This review: ' + fmtSpend(rv.cost));
+  if (spendTotal) parts.push('Session total: ' + fmtSpend(spendTotal));
+  $('rvCost').textContent = parts.join(' · ');
 }
 
 function renderRvCounts(rv) {
@@ -1623,6 +1654,8 @@ function toLadder() {
   $('ladder').classList.remove('hidden');
   $('lastReviewBtn').classList.toggle('hidden', !lastGameRec);
   $('lastReviewOpp').textContent = lastGameRec ? 'vs ' + lastGameRec.opp : '';
+  $('ladderSpend').textContent = spendTotal
+    ? 'Coach & review this session: ' + fmtSpend(spendTotal) : '';
   renderLadder();
 }
 
