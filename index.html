@@ -674,7 +674,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.32';
+var BUILD = '2026-08-29.33';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -2252,9 +2252,17 @@ function openHistMenu(rec) {
   var analysed = rec.analysis && rec.analysis.length;
   $('hmSub').textContent = resultWord(rec) + ' · ' + fmtWhen(rec.ts) +
     (analysed ? '' : ' · not analysed yet');
+  // An analysed game re-analyses from scratch — fresh Stockfish run, fresh
+  // explanations. A plain tap on the row still opens the saved analysis.
+  $('hmAnalyse').textContent = analysed ? 'Re-analyse' : 'Analyse';
   $('histMenu').classList.remove('hidden');
   $('hmAnalyse').onclick = function () {
     $('histMenu').classList.add('hidden');
+    if (analysed) {
+      delete rec.analysis; delete rec.win; delete rec.counts;
+      idbPut(rec).catch(function () {});
+      delete reviews[gameKey(rec)];   // the session cache goes with it
+    }
     openStoredGame(rec);
   };
   $('hmDelete').onclick = function () {
