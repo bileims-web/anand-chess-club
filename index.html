@@ -228,9 +228,7 @@ var LEVELS = [
   { name: 'Prize Winner',    rating: 1600 },
   { name: 'The Champion',    rating: 1900 }
 ];
-// TEMPORARY: until Anand's own net lands (task step 3), he plays as Maia
-// at its rating ceiling. maiaElo overrides the displayed rating for the net.
-var MEAN_GIRL = { name: 'Anand', rating: 2400, offLadder: true, maiaElo: 1900 };
+var MEAN_GIRL = { name: 'Anand', rating: 2400, offLadder: true };
 var THEMES = ['slate', 'dusk', 'night', 'sage'];
 var GLYPH = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
 var COACH_LINES = [
@@ -461,14 +459,16 @@ function chooseMaiaMove(moves) {
   return nucleus[nucleus.length - 1][0];
 }
 
+function oppEngine() { return opp && opp.offLadder ? ANAND : MAIA; }
+
 function aiMove() {
   aiTimer = null;
   if (over) return;
   var seq = ++aiMoveSeq;
-  var elo = opp.maiaElo || opp.rating;
+  var engine = oppEngine();
   var t0 = performance.now();
-  MAIA.init(maiaLoadStatus, maiaLoadProgress).then(function () {
-    return MAIA.evaluate(game.fen(), elo, PLAYER_ELO);
+  engine.init(netLoadStatus, netLoadProgress).then(function () {
+    return engine.evaluate(game.fen(), opp.rating, PLAYER_ELO);
   }).then(function (r) {
     if (over || seq !== aiMoveSeq || game.turn() !== 'b' || !r.moves.length) return;
     var uci = chooseMaiaMove(r.moves);
@@ -487,17 +487,19 @@ function aiMove() {
     }, delay);
   }).catch(function (err) {
     if (seq !== aiMoveSeq) return;
-    setStatus('Maia: ' + err.message + ' — retrying…');
+    setStatus(netLabel() + ': ' + err.message + ' — retrying…');
     aiTimer = setTimeout(aiMove, 3000);
   });
 }
 
-// Status-line updates while the model loads mid-game.
-function maiaLoadStatus(status) {
-  if (status === 'downloading') setStatus('Downloading Maia (46MB)…');
+// Status-line updates while a model loads mid-game.
+function netLabel() { return opp && opp.offLadder ? 'Anand' : 'Maia'; }
+function netSize() { return opp && opp.offLadder ? '2MB' : '46MB'; }
+function netLoadStatus(status) {
+  if (status === 'downloading') setStatus('Downloading ' + netLabel() + ' (' + netSize() + ')…');
 }
-function maiaLoadProgress(progress) {
-  setStatus('Downloading Maia (46MB)… ' + progress + '%');
+function netLoadProgress(progress) {
+  setStatus('Downloading ' + netLabel() + ' (' + netSize() + ')… ' + progress + '%');
 }
 
 // ---------- Input: tap and drag ----------
@@ -709,16 +711,16 @@ var SF = (function () {
   return { init: init, analyse: analyse, info: info };
 })();
 
-// ---------- Maia ----------
-// Maia 3 neural net runs in maia.worker.js (ONNX, off the main thread).
-// The model is cached in IndexedDB after first download.
-var MAIA = (function () {
+// ---------- Neural-net engines ----------
+// Each net runs in its own worker (ONNX, off the main thread) and is
+// cached in IndexedDB after first download. Same worker protocol for both.
+function makeNetEngine(workerFile, modelUrl, modelVersion) {
   var worker = null, nextId = 1, pending = {}, readyPromise = null;
   var statusCb = null, progressCb = null;
 
   function ensureWorker() {
     if (worker) return;
-    worker = new Worker('maia.worker.js');
+    worker = new Worker(workerFile);
     worker.onmessage = function (e) {
       var m = e.data || {};
       if (m.type === 'status') {
@@ -765,8 +767,8 @@ var MAIA = (function () {
       box.reject = reject;
       worker.postMessage({
         type: 'init',
-        modelUrl: 'models/maia3_simplified.onnx',
-        modelVersion: '3'
+        modelUrl: modelUrl,
+        modelVersion: modelVersion
       });
       setTimeout(function () { reject(new Error('model load timed out')); }, 300000);
     });
@@ -795,7 +797,10 @@ var MAIA = (function () {
   }
 
   return { init: init, evaluate: evaluate };
-})();
+}
+
+var MAIA = makeNetEngine('maia.worker.js', 'models/maia3_simplified.onnx', '3');
+var ANAND = makeNetEngine('anand.worker.js', 'models/meangirl-8.onnx', '1');
 
 // TEMPORARY scaffolding: prints the engine's verdict to the status line.
 var sfBusy = false;
@@ -834,9 +839,12 @@ function startGame(o, idx) {
   coachLeft = 3; tbLeft = 3; coachUses = 0;
   if (aiTimer) { clearTimeout(aiTimer); aiTimer = null; }
   aiMoveSeq++;
-  // Start fetching the net now (visible progress) so it's ready by move one.
-  MAIA.init(maiaLoadStatus, maiaLoadProgress).then(function () {
+  // Start fetching this opponent's net now (visible progress) so it's
+  // ready by move one; then quietly prefetch the other net.
+  var other = o.offLadder ? MAIA : ANAND;
+  oppEngine().init(netLoadStatus, netLoadProgress).then(function () {
     if (game.history().length === 0 && !over) setStatus('Your move — you play White.');
+    other.init(function () {}, function () {}).catch(function () {});
   }).catch(function () {});
   $('oppName').textContent = o.name;
   $('oppRt').textContent = o.rating;
