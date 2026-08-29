@@ -192,16 +192,10 @@
     font-size: 12px; padding: 3px 10px; border-radius: 999px;
     border: 1px solid currentColor;
   }
-  #rvGraph { width: 100%; height: 90px; margin: 8px 0 10px; }
-  #rvGraph svg { width: 100%; height: 100%; display: block; }
-  #rvMini {
-    position: relative; width: 68%; margin: 4px auto 8px; aspect-ratio: 1;
-    container-type: inline-size;
+  #rvBoard {
+    position: relative; width: 100%; aspect-ratio: 1;
+    container-type: inline-size; margin: 2px 0 6px;
   }
-  .rvsq { position: absolute; width: 12.5%; height: 12.5%; }
-  .rvsq.l { background: var(--light); }
-  .rvsq.d { background: var(--dark); }
-  .rvsq.hl { box-shadow: inset 0 0 0 2px var(--brass); }
   #rvExplain { font-size: 14px; padding: 4px 2px 12px; white-space: pre-line; }
   #rvExplain .voice { color: #5B9BD5; }
   .rvmoves {
@@ -229,7 +223,6 @@
   .tiertoggle button.on { border-color: var(--brass); color: var(--brass); }
   .rvarrowwrap { position: absolute; inset: 0; pointer-events: none; }
   .rvarrows { width: 100%; height: 100%; display: block; overflow: visible; }
-  #rvGraph { cursor: pointer; }
   .rvplay { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 6px 0 8px; }
   .rvplay button {
     font-size: 15px; padding: 4px 12px; border-radius: 8px; line-height: 1.4;
@@ -334,9 +327,8 @@
       <div id="rvProgTxt"></div>
     </div>
     <div class="rvcounts" id="rvCounts"></div>
-    <div id="rvGraph"></div>
     <div id="rvDetail">
-      <div id="rvMini"></div>
+      <div id="rvBoard"></div>
       <div class="rvplay">
         <button id="rvStart" aria-label="First move">&#124;&#9664;</button>
         <button id="rvPrev" aria-label="Previous move">&#9664;</button>
@@ -423,13 +415,14 @@ var over = false;
 var coachLeft = 3, tbLeft = 3;
 var chosenColor = 'w';     // ladder setting: the side you want to play
 var playerColor = 'w';     // this game's side; board flips to match
+var viewColor = 'w';       // side shown at the bottom of the board on screen
 var oppColor = 'b';
 var resignOffered = false; // he only asks once per game
 var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.6';
+var BUILD = '2026-08-29.7';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -587,12 +580,14 @@ function renderLadder() {
 // absName: indices straight out of game.board(), always a8-first.
 // sqName/coords: screen <-> square, flipped when the player is Black.
 function absName(f, r) { return FILES[f] + (8 - r); }
+// viewColor is whose side sits at the bottom of whichever board is on
+// screen: the player's while playing, the reviewed game's while reviewing.
 function sqName(f, r) {                                        // f,r are 0-7 from top-left
-  return playerColor === 'w' ? FILES[f] + (8 - r) : FILES[7 - f] + (r + 1);
+  return viewColor === 'w' ? FILES[f] + (8 - r) : FILES[7 - f] + (r + 1);
 }
 function coords(sq) {
   var f = FILES.indexOf(sq[0]), r = 8 - parseInt(sq[1], 10);
-  return playerColor === 'w' ? { f: f, r: r } : { f: 7 - f, r: 7 - r };
+  return viewColor === 'w' ? { f: f, r: r } : { f: 7 - f, r: 7 - r };
 }
 function place(el, sq) {
   var c = coords(sq);
@@ -1744,7 +1739,6 @@ function renderReview() {
     pw.classList.add('hidden');
   }
   renderRvCounts(rv);
-  renderRvGraph(rv);
   renderRvMoves(rv);
   renderRvDetail(rv);
   var parts = [];
@@ -1767,33 +1761,6 @@ function renderRvCounts(rv) {
   });
 }
 
-function renderRvGraph(rv) {
-  var n = rv.fens.length - 1;
-  if (n < 1) { $('rvGraph').innerHTML = ''; return; }
-  var pts = [];
-  for (var i = 0; i <= n; i++) {
-    if (rv.win[i] !== undefined && rv.win[i] !== null) {
-      pts.push((i / n * 100).toFixed(2) + ',' + (50 - rv.win[i] / 2).toFixed(2));
-    }
-  }
-  var dots = '';
-  rv.moves.forEach(function (m) {
-    if (!m.flagged) return;
-    var x = ((m.ply + 1) / n * 100).toFixed(2);
-    var y = (50 - m.after / 2).toFixed(2);
-    dots += '<circle class="' + RV_LABELS[m.label].cls + '" cx="' + x + '" cy="' + y +
-      '" r="1.8" fill="currentColor"></circle>';
-  });
-  $('rvGraph').innerHTML =
-    '<svg viewBox="0 0 100 50" preserveAspectRatio="none">' +
-    '<line x1="0" y1="25" x2="100" y2="25" stroke="currentColor" stroke-opacity="0.25" ' +
-    'stroke-width="0.4" stroke-dasharray="2 2"></line>' +
-    (pts.length > 1
-      ? '<polyline points="' + pts.join(' ') + '" fill="none" stroke="var(--brass)" ' +
-        'stroke-width="0.9" vector-effect="non-scaling-stroke"></polyline>'
-      : '') +
-    dots + '</svg>';
-}
 
 function renderRvMoves(rv) {
   var box = $('rvMoves');
@@ -1827,7 +1794,7 @@ function renderRvMoves(rv) {
   }
 }
 
-// arrows: [{uci, cls}] — drawn over the board, played move and better move
+// arrows: [{uci, color}] — drawn over the board, played move and better move
 function rvArrowSvg(arrows, flip) {
   var mid = function (sq) {
     var f = FILES.indexOf(sq.charAt(0));
@@ -1858,41 +1825,42 @@ function rvArrowSvg(arrows, flip) {
     '<defs>' + defs + '</defs>' + body + '</svg>';
 }
 
-function renderRvMini(fen, uci, flip, arrows) {
-  var box = $('rvMini');
+// Renders through the same place()/coords() the playing board uses, with the
+// same .sq and .piece classes, so it is the same board and the same theme.
+function renderReviewBoard(fen, lastUci, arrows) {
+  var box = $('rvBoard');
   box.innerHTML = '';
-  var hl = uci ? [uci.slice(0, 2), uci.slice(2, 4)] : [];
-  var pos = function (i) { return (flip ? 7 - i : i) * 12.5; };
-  var placement = fen.split(' ')[0].split('/');
-  for (var row = 0; row < 8; row++) {          // row 0 = rank 8, top
-    var file = 0;
-    for (var i = 0; i < placement[row].length; i++) {
-      var ch = placement[row].charAt(i);
-      if (!isNaN(parseInt(ch, 10))) { file += parseInt(ch, 10); continue; }
-      var pc = document.createElement('div');
-      pc.className = 'piece ' + (ch === ch.toUpperCase() ? 'w' : 'b');
-      pc.style.left = pos(file) + '%';
-      pc.style.top = pos(row) + '%';
-      pc.innerHTML = '<span>' + GLYPH[ch.toLowerCase()] + '</span>';
-      box.appendChild(pc);
-      file++;
-    }
+  var f, r, el;
+  for (r = 0; r < 8; r++) for (f = 0; f < 8; f++) {
+    el = document.createElement('div');
+    el.className = 'sq ' + ((f + r) % 2 === 0 ? 'l' : 'd');
+    el.style.transform = 'translate(' + (f * 100) + '%, ' + (r * 100) + '%)';
+    box.appendChild(el);
   }
-  for (var f = 0; f < 8; f++) {
-    for (var r = 0; r < 8; r++) {
-      var sq = document.createElement('div');
-      var name = FILES[f] + (8 - r);
-      sq.className = 'rvsq ' + ((f + r) % 2 === 0 ? 'l' : 'd') +
-        (hl.indexOf(name) !== -1 ? ' hl' : '');
-      sq.style.left = pos(f) + '%';
-      sq.style.top = pos(r) + '%';
-      box.insertBefore(sq, box.firstChild);   // squares under pieces
+  if (lastUci) [lastUci.slice(0, 2), lastUci.slice(2, 4)].forEach(function (sq) {
+    var m = document.createElement('div');
+    m.className = 'mark last';
+    place(m, sq);
+    box.appendChild(m);
+  });
+  var rows = fen.split(' ')[0].split('/');
+  for (r = 0; r < 8; r++) {
+    var file = 0;
+    for (var i = 0; i < rows[r].length; i++) {
+      var ch = rows[r].charAt(i);
+      if (!isNaN(parseInt(ch, 10))) { file += parseInt(ch, 10); continue; }
+      el = document.createElement('div');
+      el.className = 'piece ' + (ch === ch.toUpperCase() ? 'w' : 'b');
+      el.innerHTML = '<span>' + GLYPH[ch.toLowerCase()] + '</span>';
+      place(el, absName(file, r));
+      box.appendChild(el);
+      file++;
     }
   }
   if (arrows && arrows.length) {
     var layer = document.createElement('div');
     layer.className = 'rvarrowwrap';
-    layer.innerHTML = rvArrowSvg(arrows, flip);
+    layer.innerHTML = rvArrowSvg(arrows, viewColor === 'b');
     box.appendChild(layer);
   }
 }
@@ -1914,7 +1882,8 @@ function renderRvDetail(rv) {
   if (shown && shown.flagged && shown.bestUci && shown.bestUci !== lastUci) {
     arrows.push({ uci: shown.bestUci, color: '#4BAF57' });
   }
-  renderRvMini(rv.fens[rvPly], lastUci, rv.color === 'b', arrows);
+  viewColor = rv.color;          // the board shows the game as you played it
+  renderReviewBoard(rv.fens[rvPly], lastUci, arrows);
 
   $('rvPlyTxt').textContent = rvPly === 0
     ? 'start'
@@ -2201,6 +2170,7 @@ function startGame(o, idx, resume) {
   over = false; selected = null;
   coachLeft = 3; tbLeft = 3;
   playerColor = resume ? resume.color : chosenColor;
+  viewColor = playerColor;
   oppColor = playerColor === 'w' ? 'b' : 'w';
   resignOffered = false; oppLostStreak = 0; oppWinPct = 50;
   coachedFens = {};
@@ -2435,16 +2405,7 @@ $('historyBtn').onclick = openHistory;
 $('rvStart').onclick = function () { rvPly = 0; renderReview(); };
 $('rvPrev').onclick = function () { stepPly(-1); };
 $('rvNext').onclick = function () { stepPly(1); };
-$('rvMini').addEventListener('click', function () { stepPly(1); });
-$('rvGraph').addEventListener('click', function (e) {
-  if (!curReview) return;
-  var n = curReview.fens.length - 1;
-  var rect = $('rvGraph').getBoundingClientRect();
-  if (!rect.width) return;
-  var frac = (e.clientX - rect.left) / rect.width;
-  rvPly = Math.max(0, Math.min(n, Math.round(frac * n)));
-  renderReview();
-});
+$('rvBoard').addEventListener('click', function () { stepPly(1); });
 $('rvMoves').addEventListener('click', function (e) {
   var t = e.target.closest ? e.target.closest('[data-ply]') : null;
   if (!t) return;
