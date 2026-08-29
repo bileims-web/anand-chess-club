@@ -13,6 +13,26 @@ if (typeof window === 'undefined') {
          url.pathname.includes("/engine/") ||
          url.pathname.endsWith("/pieces.js"));
 
+    /* Responding here bypasses the COOP/COEP handler below, and a
+       cross-origin-isolated page refuses to start a worker whose script
+       lacks these headers (this broke the nested Stockfish worker). So
+       everything served from this cache gets the same stamp. */
+    const withCoiHeaders = (response) => {
+        if (!response || response.status === 0) return response;
+        const h = new Headers(response.headers);
+        h.set("Cross-Origin-Embedder-Policy",
+            coepCredentialless ? "credentialless" : "require-corp");
+        if (!coepCredentialless) {
+            h.set("Cross-Origin-Resource-Policy", "cross-origin");
+        }
+        h.set("Cross-Origin-Opener-Policy", "same-origin");
+        return new Response(response.body, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: h,
+        });
+    };
+
     self.addEventListener("fetch", (event) => {
         const url = new URL(event.request.url);
         if (event.request.method !== "GET" || !cacheable(url)) return;
@@ -21,9 +41,9 @@ if (typeof window === 'undefined') {
             const hit = await cache.match(event.request);
             const refresh = fetch(event.request).then((resp) => {
                 if (resp && resp.ok) cache.put(event.request, resp.clone());
-                return resp;
-            }).catch(() => hit);
-            if (hit) { event.waitUntil(refresh.catch(() => {})); return hit; }
+                return withCoiHeaders(resp);
+            }).catch(() => withCoiHeaders(hit));
+            if (hit) { event.waitUntil(refresh.catch(() => {})); return withCoiHeaders(hit); }
             return refresh;
         })());
     });
