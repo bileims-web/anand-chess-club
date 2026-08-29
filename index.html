@@ -145,6 +145,7 @@
     min-height: 22px; text-align: center; padding: 12px 16px 0; font-size: 14px;
     color: color-mix(in srgb, var(--pw) 70%, transparent);
   }
+  #status.coach { text-align: left; white-space: pre-line; }
 
   /* ---------- End card ---------- */
   #card {
@@ -610,7 +611,8 @@ var COACH_SYSTEM =
   'numbers in your answer. Two to three sentences per voice. Plain language.\n' +
   'Anand’s move has been measured by Stockfish. If it is worse, say plainly ' +
   'that it is worse and roughly what it costs. Never present a losing move as ' +
-  'merely interesting.';
+  'merely interesting.\n' +
+  'Always be clear whose piece is whose; never call an opponent’s piece "yours".';
 
 function winPct(cp) {
   return 50 + 50 * (2 / (1 + Math.exp(-0.00368208 * cp)) - 1);
@@ -633,6 +635,27 @@ function sanLine(fen, ucis, maxPlies) {
   return out.join(' ');
 }
 function sanOf(fen, uci) { return sanLine(fen, [uci], 1); }
+
+// "White pieces: Kg1 Qd1 ... | Black pieces: ..." so ownership is explicit.
+function pieceOwnership(fen) {
+  var g = new Chess(fen);
+  var order = { k: 0, q: 1, r: 2, b: 3, n: 4, p: 5 };
+  var sides = { w: [], b: [] };
+  'abcdefgh'.split('').forEach(function (f) {
+    for (var r = 1; r <= 8; r++) {
+      var sq = f + r;
+      var pc = g.get(sq);
+      if (pc) sides[pc.color].push({ t: pc.type, sq: sq });
+    }
+  });
+  function fmt(list) {
+    list.sort(function (a, b) { return order[a.t] - order[b.t]; });
+    return list.map(function (p) {
+      return (p.t === 'p' ? '' : p.t.toUpperCase()) + p.sq;
+    }).join(' ');
+  }
+  return 'White pieces: ' + fmt(sides.w) + ' | Black pieces: ' + fmt(sides.b);
+}
 
 // -- device-local key + cache storage (same IndexedDB the models use) --
 function idbOpen() {
@@ -755,7 +778,9 @@ function coachEngineData(fen) {
 function coachPayload(d) {
   var lines = [];
   lines.push('Position (FEN): ' + d.fen);
-  lines.push('The student is playing White and it is White to move.');
+  lines.push('The student you are coaching is WHITE. It is White to move. ' +
+    'Black is the opponent — Black’s pieces are never "yours" or "the student’s".');
+  lines.push(pieceOwnership(d.fen));
   lines.push('Stockfish, depth 18 (the authority):');
   lines.push('- Best move: ' + d.bestSan +
     ' | White win chance with best play: ' + d.bestWin.toFixed(1) + '%' +
@@ -773,9 +798,9 @@ function coachPayload(d) {
       ' | measured by Stockfish: White win chance ' + d.anandWin.toFixed(1) + '%, which is ' +
       d.anandCost.toFixed(1) + ' percentage points worse than the best move' +
       ' | line after it: ' + d.anandLine);
-    lines.push('Reply with exactly two short paragraphs, the first starting "Stockfish:" ' +
-      'explaining the best move, the second starting "Anand:" pitching his suggestion ' +
-      'in his sharp voice while stating plainly what it costs.');
+    lines.push('Reply with exactly two short paragraphs separated by a blank line, ' +
+      'the first starting "Stockfish:" explaining the best move, the second starting ' +
+      '"Anand:" pitching his suggestion in his sharp voice while stating plainly what it costs.');
   }
   return lines.join('\n');
 }
@@ -840,13 +865,16 @@ function coachSpinner(on) {
 
 function coachShow(fen, text) {
   // don't clobber the status if the position moved on while we worked
-  if (!over && game && game.fen() === fen) setStatus(text);
+  if (!over && game && game.fen() === fen) {
+    setStatus(text);
+    $('status').classList.add('coach');   // left-aligned, keeps blank lines
+  }
 }
 
 function useCoach() {
   if (over || game.turn() !== 'w' || aiTimer || coachBusy) return;
   var fen = game.fen();
-  if (coachText[fen]) { setStatus(coachText[fen]); return; }   // cached: free
+  if (coachText[fen]) { coachShow(fen, coachText[fen]); return; }   // cached: free
   if (coachLeft === 0) return;
   coachLeft--;
   renderPips();
@@ -888,7 +916,11 @@ function useTakeback() {
 }
 
 // ---------- Game flow ----------
-function setStatus(t) { $('status').textContent = t; }
+function setStatus(t) {
+  var s = $('status');
+  s.classList.remove('coach');
+  s.textContent = t;
+}
 
 // ---------- Stockfish ----------
 // Engine runs in stockfish.worker.js; nothing here blocks the main thread.
