@@ -195,6 +195,8 @@
     <button class="tool" id="coachBtn">Coach <span class="pips" id="coachPips"></span></button>
     <!-- TEMPORARY scaffolding: removed once the real Coach uses the engine. -->
     <button class="tool" id="sfBtn">SF test</button>
+    <!-- TEMPORARY scaffolding: Maia inference proof (task step 1). -->
+    <button class="tool" id="maiaBtn">Maia test</button>
     <button class="tool" id="tbBtn">Takeback <span class="pips" id="tbPips"></span></button>
   </div>
   <div id="status"></div>
@@ -652,6 +654,120 @@ var SF = (function () {
   return { init: init, analyse: analyse, info: info };
 })();
 
+// ---------- Maia ----------
+// Maia 3 neural net runs in maia.worker.js (ONNX, off the main thread).
+// The model is cached in IndexedDB after first download.
+var MAIA = (function () {
+  var worker = null, nextId = 1, pending = {}, readyPromise = null;
+  var statusCb = null, progressCb = null;
+
+  function ensureWorker() {
+    if (worker) return;
+    worker = new Worker('maia.worker.js');
+    worker.onmessage = function (e) {
+      var m = e.data || {};
+      if (m.type === 'status' && statusCb) statusCb(m.status);
+      if (m.type === 'progress' && progressCb) progressCb(m.progress);
+      if (m.type === 'eval-result' || (m.type === 'error' && m.id !== undefined)) {
+        var p = pending[m.id];
+        if (!p) return;
+        delete pending[m.id];
+        clearTimeout(p.timer);
+        if (m.type === 'eval-result') p.resolve(m); else p.reject(new Error(m.message));
+      } else if (m.type === 'error') {
+        if (readyPromise && readyPromise.reject) readyPromise.reject(new Error(m.message));
+      }
+    };
+    worker.onerror = function (e) {
+      var err = new Error(e.message || 'maia worker crashed');
+      if (readyPromise && readyPromise.reject) readyPromise.reject(err);
+      Object.keys(pending).forEach(function (id) {
+        clearTimeout(pending[id].timer);
+        pending[id].reject(err);
+        delete pending[id];
+      });
+      try { worker.terminate(); } catch (ignore) {}
+      worker = null;
+      readyPromise = null;
+    };
+  }
+
+  // init(onStatus, onProgress) resolves when the model is loaded,
+  // downloading it (with progress callbacks) if it isn't cached yet.
+  function init(onStatus, onProgress) {
+    if (readyPromise) return readyPromise.promise;
+    statusCb = onStatus || null;
+    progressCb = onProgress || null;
+    ensureWorker();
+    var box = {};
+    box.promise = new Promise(function (resolve, reject) {
+      box.reject = reject;
+      var prevStatus = statusCb;
+      statusCb = function (status) {
+        if (prevStatus) prevStatus(status);
+        if (status === 'no-cache') worker.postMessage({ type: 'download' });
+        if (status === 'ready') resolve();
+      };
+      worker.postMessage({
+        type: 'init',
+        modelUrl: 'models/maia3_simplified.onnx',
+        modelVersion: '3'
+      });
+      setTimeout(function () { reject(new Error('maia init timed out')); }, 300000);
+    });
+    readyPromise = box;
+    return box.promise;
+  }
+
+  // evaluate(fen, eloSelf, eloOppo) -> {moves: [[uci, prob], ...] sorted, value}
+  function evaluate(fen, eloSelf, eloOppo) {
+    return new Promise(function (resolve, reject) {
+      var id = nextId++;
+      pending[id] = {
+        resolve: resolve,
+        reject: reject,
+        timer: setTimeout(function () {
+          delete pending[id];
+          reject(new Error('maia eval timed out'));
+        }, 30000)
+      };
+      worker.postMessage({ type: 'eval', id: id, fen: fen, eloSelf: eloSelf, eloOppo: eloOppo });
+    });
+  }
+
+  return { init: init, evaluate: evaluate };
+})();
+
+// TEMPORARY scaffolding (task step 1): prove in-browser inference on this device.
+var maiaBusy = false;
+function maiaTest() {
+  if (maiaBusy) return;
+  maiaBusy = true;
+  var t0 = performance.now();
+  MAIA.init(
+    function (status) {
+      if (status === 'downloading') setStatus('Maia: downloading model…');
+      if (status === 'loading') setStatus('Maia: loading…');
+    },
+    function (progress) { setStatus('Maia: downloading model… ' + progress + '%'); }
+  ).then(function () {
+    var tLoad = ((performance.now() - t0) / 1000).toFixed(1);
+    setStatus('Maia: thinking…');
+    var t1 = performance.now();
+    var START = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+    return MAIA.evaluate(START, 1100, 1100).then(function (r) {
+      var tEval = Math.round(performance.now() - t1);
+      var top = r.moves[0];
+      console.log('Maia top move (startpos, elo 1100):', top[0],
+        (top[1] * 100).toFixed(1) + '%', 'value', r.value, r.moves.slice(0, 5));
+      setStatus('Maia: ' + top[0] + ' ' + (top[1] * 100).toFixed(0) +
+        '% · load ' + tLoad + 's · eval ' + tEval + 'ms');
+    });
+  }).catch(function (err) {
+    setStatus('Maia error: ' + err.message);
+  }).then(function () { maiaBusy = false; });
+}
+
 // TEMPORARY scaffolding: prints the engine's verdict to the status line.
 var sfBusy = false;
 function sfTest() {
@@ -751,6 +867,7 @@ $('ladderBtn').onclick = toLadder;
 $('rematchBtn').onclick = function () { startGame(opp, oppIndex); };
 $('coachBtn').onclick = useCoach;
 $('sfBtn').onclick = sfTest;
+$('maiaBtn').onclick = maiaTest;
 $('tbBtn').onclick = useTakeback;
 </script>
 </body>
