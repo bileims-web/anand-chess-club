@@ -195,8 +195,6 @@
     <button class="tool" id="coachBtn">Coach <span class="pips" id="coachPips"></span></button>
     <!-- TEMPORARY scaffolding: removed once the real Coach uses the engine. -->
     <button class="tool" id="sfBtn">SF test</button>
-    <!-- TEMPORARY scaffolding: Maia inference proof (task step 1). -->
-    <button class="tool" id="maiaBtn">Maia test</button>
     <button class="tool" id="tbBtn">Takeback <span class="pips" id="tbPips"></span></button>
   </div>
   <div id="status"></div>
@@ -230,10 +228,11 @@ var LEVELS = [
   { name: 'Prize Winner',    rating: 1600 },
   { name: 'The Champion',    rating: 1900 }
 ];
-var MEAN_GIRL = { name: 'Anand', rating: 2400, offLadder: true };
+// TEMPORARY: until Anand's own net lands (task step 3), he plays as Maia
+// at its rating ceiling. maiaElo overrides the displayed rating for the net.
+var MEAN_GIRL = { name: 'Anand', rating: 2400, offLadder: true, maiaElo: 1900 };
 var THEMES = ['slate', 'dusk', 'night', 'sage'];
 var GLYPH = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
-var VAL = { p: 1, n: 3, b: 3, r: 5, q: 9 };
 var COACH_LINES = [
   'Coach: scan every check, capture and threat before you commit. (Full analysis arrives with the engine.)',
   'Coach: ask what your opponent’s last move attacks. (Full analysis arrives with the engine.)',
@@ -427,22 +426,78 @@ function tryPlayerMove(from, to) {
   return true;
 }
 
-// ---------- Placeholder opponent (Maia replaces this later) ----------
+// ---------- Maia opponent ----------
+// The net's policy is the move choice — no search (it would destroy the
+// human-like play). Variety comes from temperature + nucleus (top-p)
+// sampling over the policy, applied to the whole game, mirroring the
+// Temperature/TopP controls of the Maia 3 UCI engine.
+var MAIA_TEMPERATURE = 0.5;  // 0 = argmax; low keeps quality, adds variety
+var MAIA_TOP_P = 0.95;       // drop the long tail of rare blunders
+var PLAYER_ELO = 1000;       // fed as elo_oppo (rough player strength)
+var aiMoveSeq = 0;           // invalidates in-flight evals on new game / takeback
+
+function chooseMaiaMove(moves) {
+  if (MAIA_TEMPERATURE <= 0) return moves[0][0];
+  // Nucleus: smallest prefix of the sorted policy with mass >= MAIA_TOP_P.
+  var nucleus = [];
+  var mass = 0;
+  for (var i = 0; i < moves.length; i++) {
+    nucleus.push(moves[i]);
+    mass += moves[i][1];
+    if (mass >= MAIA_TOP_P) break;
+  }
+  // Temperature: p^(1/T), renormalised, then sample.
+  var sum = 0;
+  var weights = nucleus.map(function (m) {
+    var w = Math.pow(m[1], 1 / MAIA_TEMPERATURE);
+    sum += w;
+    return w;
+  });
+  var r = Math.random() * sum;
+  for (var j = 0; j < nucleus.length; j++) {
+    r -= weights[j];
+    if (r <= 0) return nucleus[j][0];
+  }
+  return nucleus[nucleus.length - 1][0];
+}
+
 function aiMove() {
   aiTimer = null;
   if (over) return;
-  var moves = game.moves({ verbose: true });
-  if (!moves.length) return;
-  var noise = Math.max(0.15, (1650 - opp.rating) / 260);
-  var best = null, bestScore = -Infinity;
-  moves.forEach(function (m) {
-    var s = (VAL[m.captured] || 0) + (m.promotion ? VAL[m.promotion] : 0) +
-            noise * (Math.random() + Math.random() + Math.random() - 1.5);
-    if (s > bestScore) { bestScore = s; best = m; }
+  var seq = ++aiMoveSeq;
+  var elo = opp.maiaElo || opp.rating;
+  var t0 = performance.now();
+  MAIA.init(maiaLoadStatus, maiaLoadProgress).then(function () {
+    return MAIA.evaluate(game.fen(), elo, PLAYER_ELO);
+  }).then(function (r) {
+    if (over || seq !== aiMoveSeq || game.turn() !== 'b' || !r.moves.length) return;
+    var uci = chooseMaiaMove(r.moves);
+    // keep a touch of think time so instant cached replies still feel human
+    var delay = Math.max(0, 400 + Math.random() * 500 - (performance.now() - t0));
+    setTimeout(function () {
+      if (over || seq !== aiMoveSeq || game.turn() !== 'b') return;
+      var mv = game.move({
+        from: uci.slice(0, 2),
+        to: uci.slice(2, 4),
+        promotion: uci.length > 4 ? uci.slice(4) : undefined
+      });
+      if (!mv) mv = game.move(game.moves()[0]);  // should never happen
+      animateMove(mv);
+      afterMove(mv);
+    }, delay);
+  }).catch(function (err) {
+    if (seq !== aiMoveSeq) return;
+    setStatus('Maia: ' + err.message + ' — retrying…');
+    aiTimer = setTimeout(aiMove, 3000);
   });
-  var mv = game.move(best.san);
-  animateMove(mv);
-  afterMove(mv);
+}
+
+// Status-line updates while the model loads mid-game.
+function maiaLoadStatus(status) {
+  if (status === 'downloading') setStatus('Downloading Maia (46MB)…');
+}
+function maiaLoadProgress(progress) {
+  setStatus('Downloading Maia (46MB)… ' + progress + '%');
 }
 
 // ---------- Input: tap and drag ----------
@@ -666,7 +721,11 @@ var MAIA = (function () {
     worker = new Worker('maia.worker.js');
     worker.onmessage = function (e) {
       var m = e.data || {};
-      if (m.type === 'status' && statusCb) statusCb(m.status);
+      if (m.type === 'status') {
+        if (m.status === 'no-cache') worker.postMessage({ type: 'download' });
+        if (m.status === 'ready' && readyPromise && readyPromise.resolve) readyPromise.resolve();
+        if (statusCb) statusCb(m.status);
+      }
       if (m.type === 'progress' && progressCb) progressCb(m.progress);
       if (m.type === 'eval-result' || (m.type === 'error' && m.id !== undefined)) {
         var p = pending[m.id];
@@ -694,26 +753,26 @@ var MAIA = (function () {
 
   // init(onStatus, onProgress) resolves when the model is loaded,
   // downloading it (with progress callbacks) if it isn't cached yet.
+  // Later calls refresh the callbacks; a failed init can be retried.
   function init(onStatus, onProgress) {
+    if (onStatus) statusCb = onStatus;
+    if (onProgress) progressCb = onProgress;
     if (readyPromise) return readyPromise.promise;
-    statusCb = onStatus || null;
-    progressCb = onProgress || null;
     ensureWorker();
     var box = {};
     box.promise = new Promise(function (resolve, reject) {
+      box.resolve = resolve;
       box.reject = reject;
-      var prevStatus = statusCb;
-      statusCb = function (status) {
-        if (prevStatus) prevStatus(status);
-        if (status === 'no-cache') worker.postMessage({ type: 'download' });
-        if (status === 'ready') resolve();
-      };
       worker.postMessage({
         type: 'init',
         modelUrl: 'models/maia3_simplified.onnx',
         modelVersion: '3'
       });
-      setTimeout(function () { reject(new Error('maia init timed out')); }, 300000);
+      setTimeout(function () { reject(new Error('model load timed out')); }, 300000);
+    });
+    box.promise = box.promise.catch(function (err) {
+      readyPromise = null;   // allow a retry
+      throw err;
     });
     readyPromise = box;
     return box.promise;
@@ -737,36 +796,6 @@ var MAIA = (function () {
 
   return { init: init, evaluate: evaluate };
 })();
-
-// TEMPORARY scaffolding (task step 1): prove in-browser inference on this device.
-var maiaBusy = false;
-function maiaTest() {
-  if (maiaBusy) return;
-  maiaBusy = true;
-  var t0 = performance.now();
-  MAIA.init(
-    function (status) {
-      if (status === 'downloading') setStatus('Maia: downloading model…');
-      if (status === 'loading') setStatus('Maia: loading…');
-    },
-    function (progress) { setStatus('Maia: downloading model… ' + progress + '%'); }
-  ).then(function () {
-    var tLoad = ((performance.now() - t0) / 1000).toFixed(1);
-    setStatus('Maia: thinking…');
-    var t1 = performance.now();
-    var START = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
-    return MAIA.evaluate(START, 1100, 1100).then(function (r) {
-      var tEval = Math.round(performance.now() - t1);
-      var top = r.moves[0];
-      console.log('Maia top move (startpos, elo 1100):', top[0],
-        (top[1] * 100).toFixed(1) + '%', 'value', r.value, r.moves.slice(0, 5));
-      setStatus('Maia: ' + top[0] + ' ' + (top[1] * 100).toFixed(0) +
-        '% · load ' + tLoad + 's · eval ' + tEval + 'ms');
-    });
-  }).catch(function (err) {
-    setStatus('Maia error: ' + err.message);
-  }).then(function () { maiaBusy = false; });
-}
 
 // TEMPORARY scaffolding: prints the engine's verdict to the status line.
 var sfBusy = false;
@@ -804,6 +833,11 @@ function startGame(o, idx) {
   over = false; selected = null;
   coachLeft = 3; tbLeft = 3; coachUses = 0;
   if (aiTimer) { clearTimeout(aiTimer); aiTimer = null; }
+  aiMoveSeq++;
+  // Start fetching the net now (visible progress) so it's ready by move one.
+  MAIA.init(maiaLoadStatus, maiaLoadProgress).then(function () {
+    if (game.history().length === 0 && !over) setStatus('Your move — you play White.');
+  }).catch(function () {});
   $('oppName').textContent = o.name;
   $('oppRt').textContent = o.rating;
   $('ladder').classList.add('hidden');
@@ -847,6 +881,7 @@ function endGame() {
 
 function toLadder() {
   if (aiTimer) { clearTimeout(aiTimer); aiTimer = null; }
+  aiMoveSeq++;
   $('gameScr').classList.add('hidden');
   $('card').classList.add('hidden');
   $('ladder').classList.remove('hidden');
@@ -867,7 +902,6 @@ $('ladderBtn').onclick = toLadder;
 $('rematchBtn').onclick = function () { startGame(opp, oppIndex); };
 $('coachBtn').onclick = useCoach;
 $('sfBtn').onclick = sfTest;
-$('maiaBtn').onclick = maiaTest;
 $('tbBtn').onclick = useTakeback;
 </script>
 </body>
