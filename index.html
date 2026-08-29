@@ -157,7 +157,7 @@
   }
   .gametabs button:disabled { opacity: .35; cursor: default; }
 
-  #card, #offer {
+  #card, #offer, #startDlg {
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
     background: rgba(0,0,0,.55); z-index: 50; padding: 24px;
   }
@@ -167,7 +167,8 @@
   }
   .cardbox h2 { font-family: Georgia, serif; margin: 0 0 8px; font-size: 22px; }
   .cardbox p { margin: 0 0 18px; font-size: 14px; color: color-mix(in srgb, var(--pw) 75%, transparent); }
-  .cardbox .btns { display: flex; gap: 10px; justify-content: center; }
+  .cardbox .btns { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .cardbox .btns + .btns { margin-top: 10px; }
   .cardbox .btns button {
     padding: 8px 16px; border-radius: 8px; font-size: 14px;
     border: 1px solid color-mix(in srgb, var(--pw) 30%, transparent);
@@ -250,7 +251,6 @@
     <span class="nm">Review last game</span><span class="rt" id="lastReviewOpp"></span>
   </button>
   <div class="tiers">
-    <div class="tierrow"><span class="tierlab">Play as</span><span id="colorChips"></span></div>
     <div class="tierrow"><span class="tierlab">Coach</span><span id="coachTierChips"></span></div>
     <div class="tierrow"><span class="tierlab">Review</span><span id="reviewTierChips"></span></div>
   </div>
@@ -302,6 +302,21 @@
     <p class="spend" id="rvCost"></p>
   </div>
 </section>
+
+<div id="startDlg" class="hidden">
+  <div class="cardbox">
+    <h2 id="startTitle"></h2>
+    <p id="startMsg"></p>
+    <div class="btns">
+      <button id="startWhite">Play White</button>
+      <button id="startBlack">Play Black</button>
+    </div>
+    <div class="btns">
+      <button id="startResume" class="primary">Resume game</button>
+      <button id="startCancel">Cancel</button>
+    </div>
+  </div>
+</div>
 
 <div id="offer" class="hidden">
   <div class="cardbox">
@@ -362,7 +377,7 @@ var resignOffered = false; // he only asks once per game
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.1';
+var BUILD = '2026-08-29.2';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -410,15 +425,6 @@ function renderTierChips(boxId, current, pick) {
 }
 
 function renderTiers() {
-  var cbox = $('colorChips');
-  cbox.innerHTML = '';
-  [['w', 'White'], ['b', 'Black']].forEach(function (c) {
-    var b = document.createElement('button');
-    b.className = 'chip' + (chosenColor === c[0] ? ' on' : '');
-    b.textContent = c[1];
-    b.onclick = function () { chosenColor = c[0]; renderTiers(); saveState(); };
-    cbox.appendChild(b);
-  });
   renderTierChips('coachTierChips', coachTier, function (t) {
     coachTier = t;
     renderTiers();
@@ -497,7 +503,7 @@ function renderLadder() {
     b.innerHTML = '<span class="nm">' + lv.name + '</span>' +
                   '<span class="rt">' + lv.rating + '</span>' +
                   '<span class="st">' + (state === 'beaten' ? '✓' : (state === 'locked' ? 'Locked' : '')) + '</span>';
-    if (state !== 'locked') b.onclick = function () { startGame(lv, i); };
+    if (state !== 'locked') b.onclick = function () { openStartDialog(lv, i); };
     else b.disabled = true;
     box.appendChild(b);
   });
@@ -509,7 +515,7 @@ function renderLadder() {
   mg.className = 'row mg';
   mg.innerHTML = '<span class="nm">' + MEAN_GIRL.name + '</span>' +
                  '<span class="rt">' + MEAN_GIRL.rating + '</span><span class="st"></span>';
-  mg.onclick = function () { startGame(MEAN_GIRL, -1); };
+  mg.onclick = function () { openStartDialog(MEAN_GIRL, -1); };
   box.appendChild(mg);
 }
 
@@ -1933,6 +1939,7 @@ function startGame(o, idx, resume) {
   $('gameScr').classList.remove('hidden');
   $('card').classList.add('hidden');
   $('offer').classList.add('hidden');
+  $('startDlg').classList.add('hidden');
   rebuildPieces();
   setMarks();
   clearHints();
@@ -1947,6 +1954,35 @@ function startGame(o, idx, resume) {
     setStatus(opp.name + ' is thinking…');
     aiTimer = setTimeout(aiMove, 500 + Math.random() * 400);
   }
+}
+
+// ---------- Choosing a colour, or picking up where you left off ----------
+var startDlgOpp = null, startDlgIdx = -1;
+
+function openStartDialog(o, idx) {
+  startDlgOpp = o; startDlgIdx = idx;
+  var resumable = !!pendingGame && pendingGame.oppIndex === idx;
+  var elsewhere = !!pendingGame && pendingGame.oppIndex !== idx;
+  $('startTitle').textContent = o.name;
+  $('startMsg').textContent = resumable
+    ? 'Rated ' + o.rating + '. Pick up your unfinished game, or start again as White or Black.'
+    : (elsewhere
+        ? 'Rated ' + o.rating + '. Starting here ends your unfinished game against ' +
+          pendingGame.oppName + '.'
+        : 'Rated ' + o.rating + '. Which colour do you want?');
+  $('startResume').classList.toggle('hidden', !resumable);
+  $('startDlg').classList.remove('hidden');
+}
+
+function closeStartDialog() { $('startDlg').classList.add('hidden'); }
+
+function startChosen(color) {
+  closeStartDialog();
+  if (!startDlgOpp) return;
+  chosenColor = color;
+  saveState();
+  clearSavedGame();          // a fresh game replaces whatever was pending
+  startGame(startDlgOpp, startDlgIdx);
 }
 
 // ---------- Unfinished game ----------
@@ -2087,6 +2123,10 @@ $('rematchBtn').onclick = function () { startGame(opp, oppIndex); };
 $('coachBtn').onclick = useCoach;
 $('tbBtn').onclick = useTakeback;
 $('resumeBtn').onclick = resumeGame;
+$('startWhite').onclick = function () { startChosen('w'); };
+$('startBlack').onclick = function () { startChosen('b'); };
+$('startResume').onclick = function () { closeStartDialog(); resumeGame(); };
+$('startCancel').onclick = closeStartDialog;
 $('resignBtn').onclick = playerResign;
 $('drawBtn').onclick = playerOfferDraw;
 $('reviewBtn').onclick = startReview;
