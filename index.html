@@ -390,6 +390,26 @@
     color: color-mix(in srgb, var(--pw) 70%, transparent);
   }
   .rvplay button:disabled { opacity: .3; }
+  /* "Play the variation": offered on a move that had a better answer. */
+  .varbtn {
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    width: 100%; padding: 9px 14px; margin: 0 0 12px; border-radius: 10px;
+    min-height: 46px; font-size: 14px; color: var(--brass);
+    border: 1px solid color-mix(in srgb, var(--brass) 55%, transparent);
+    background: color-mix(in srgb, var(--brass) 9%, transparent);
+    transition: transform 90ms ease-out, background-color 90ms linear;
+  }
+  .varbtn:active {
+    background: color-mix(in srgb, var(--brass) 30%, transparent); transform: scale(.975);
+  }
+  .varbtn .sub { font-size: 12px; color: color-mix(in srgb, var(--pw) 45%, transparent); }
+  /* Says plainly that the board is no longer the game you played. */
+  #varBanner {
+    margin: 6px 16px 0; padding: 5px 10px; border-radius: 8px;
+    font-size: 12px; text-align: center; color: var(--brass);
+    border: 1px solid color-mix(in srgb, var(--brass) 30%, transparent);
+    background: color-mix(in srgb, var(--brass) 7%, transparent);
+  }
   #rvPlyTxt { font-size: 12px; min-width: 62px; text-align: left;
     color: color-mix(in srgb, var(--pw) 45%, transparent); font-variant-numeric: tabular-nums; }
   #histList { max-width: 520px; margin: 0 auto; padding: 8px 16px 32px; }
@@ -435,6 +455,7 @@
     <div class="who"><span id="oppAv"></span><span class="nm" id="oppName"></span><span class="rt" id="oppRt"></span></div>
     <button class="gear" id="gearGame" aria-label="Settings">&#9881;</button>
   </div>
+  <div id="varBanner" class="hidden"></div>
   <div id="board">
     <div id="squares"></div>
     <div id="marks"></div>
@@ -486,6 +507,7 @@
         <span id="rvPlyTxt"></span>
       </div>
       <div id="rvExplain"></div>
+      <div id="rvVar"></div>
     </div>
     <div class="rvmoves" id="rvMoves"></div>
     <p class="spend" id="rvCost"></p>
@@ -686,7 +708,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-29.41';
+var BUILD = '2026-08-30.1';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -2613,6 +2635,8 @@ function renderRvDetail(rv) {
 
   // commentary belongs to the move just played, when it was one of yours
   var m = shown;
+  var varBox = $('rvVar');
+  varBox.innerHTML = '';
   if (!m) { $('rvExplain').textContent = ''; return; }
 
   var head = 'You played ' + m.san +
@@ -2627,6 +2651,154 @@ function renderRvDetail(rv) {
   $('rvExplain').innerHTML =
     '<span class="' + RV_LABELS[m.label].cls + '">' + escapeHtml(head) + '</span>' +
     (body ? '\n' + escapeHtml(body).replace(/^(Anand:)/, '<span class="voice">$1</span>') : '');
+
+  // A move that had a better answer can be played out from here against Anand.
+  if (canPlayVariation(m)) {
+    var vb = document.createElement('button');
+    vb.className = 'varbtn';
+    vb.innerHTML = '<span>Play the variation</span><span class="sub">' +
+      escapeHtml(m.bestSan) + ' from here — play it out against Anand</span>';
+    vb.onclick = function () { playVariation(m); };
+    varBox.appendChild(vb);
+  }
+}
+
+// ---------- Playing a variation ----------
+// A move the review flagged can be taken back to the position before it and
+// played on from there against Anand — the coach's own net — to find out what
+// the better move was actually worth. It is exploration, not a game: it earns
+// no ladder progress, writes no history, and never touches the unfinished game
+// waiting in IndexedDB.
+var variation = null;   // { rv, ply, m } while one is being played
+
+// The labels that leave a better move to try. 'great' is flagged too, but that
+// move already was the best one, so there is nothing to replay.
+var VAR_LABELS = { blunder: 1, mistake: 1, inaccuracy: 1, missed: 1 };
+
+function canPlayVariation(m) {
+  return !!(m && VAR_LABELS[m.label] && m.bestUci && m.bestSan && m.bestUci !== m.uci);
+}
+
+function playVariation(m) {
+  var rv = curReview;
+  if (!rv || !m || !m.fenBefore || !canPlayVariation(m)) return;
+  variation = { rv: rv, ply: rvPly, m: m };
+
+  opp = MEAN_GIRL; oppIndex = -1;
+  game = new Chess(m.fenBefore);
+  over = false; selected = null;
+  playerColor = rv.color;                       // at this position it is your move
+  oppColor = playerColor === 'w' ? 'b' : 'w';
+  viewColor = playerColor;
+  labelSquares();
+  pipTotal = pipAllowance(MEAN_GIRL.rating);    // his allowance, not your game's
+  coachLeft = pipTotal; tbLeft = pipTotal;
+  resignOffered = false; oppLostStreak = 0; oppWinPct = 50;
+  coachedFens = {};
+  coachVoices = null;
+  if (aiTimer) { clearTimeout(aiTimer); aiTimer = null; }
+  aiMoveSeq++;
+  ANAND.init(netLoadStatus, netLoadProgress).catch(function () {});
+
+  $('oppAv').innerHTML = avatarHtml(MEAN_GIRL.rating, MEAN_GIRL.avatar, true,
+    MEAN_GIRL.avatarKind, MEAN_GIRL.name);
+  $('oppName').textContent = MEAN_GIRL.name;
+  $('oppRt').textContent = MEAN_GIRL.rating;
+  $('varBanner').textContent = 'Variation · you played ' + m.san + ' here';
+  $('varBanner').classList.remove('hidden');
+  $('reviewScr').classList.add('hidden');
+  $('ladder').classList.add('hidden');
+  $('histScr').classList.add('hidden');
+  $('card').classList.add('hidden');
+  $('offer').classList.add('hidden');
+  $('gameScr').classList.remove('hidden');
+
+  rebuildPieces();
+  setMarks();
+  clearHints();
+  renderPips();
+  renderTabs();
+  showVariationHint();
+}
+
+// The recommended move, drawn on the live board in the review's own green.
+// afterMove() clears that layer, so it lasts exactly until you play something.
+function showVariationHint() {
+  var m = variation && variation.m;
+  var layer = $('coachLayer');
+  if (!m || !layer) return;
+  layer.innerHTML = '';
+  var wrap = document.createElement('div');
+  wrap.className = 'rvarrowwrap';
+  wrap.innerHTML = rvOverlaySvg([{ uci: m.bestUci, color: '#6E9E74' }], [], viewColor === 'b');
+  layer.appendChild(wrap);
+  setStatus('You played ' + m.san + ' here. Try ' + m.bestSan + ' instead — Anand answers.');
+}
+
+function replayVariation() {
+  if (variation) playVariation(variation.m);
+}
+
+// Back to the review, at the move it was launched from.
+function exitVariation() {
+  var v = variation;
+  variation = null;
+  if (aiTimer) { clearTimeout(aiTimer); aiTimer = null; }
+  aiMoveSeq++;
+  game = null; opp = null; oppIndex = -1; over = false;
+  coachVoices = null;
+  clearCoachVisuals();
+  $('varBanner').classList.add('hidden');
+  $('card').classList.add('hidden');
+  $('offer').classList.add('hidden');
+  $('gameScr').classList.add('hidden');
+  if (!v || !v.rv) { toLadder(); return; }
+  curReview = v.rv;
+  rvPly = v.ply;
+  $('reviewScr').classList.remove('hidden');
+  renderReview();
+}
+
+function endVariation(title, result) {
+  var m = variation.m;
+  var msg;
+  if (result === 'win') {
+    msg = 'You won it — that is what ' + m.bestSan + ' was worth instead of ' + m.san + '.';
+  } else if (result === 'loss') {
+    msg = 'Anand took this one. Try the line again, or play it a different way.';
+  } else {
+    msg = 'The variation ended level.';
+  }
+  clearCoachVisuals();
+  showVariationCard(title, msg);
+  renderTabs();
+  setStatus('');
+}
+
+// The end card serves both a finished game and a finished variation, so each
+// show sets its own labels and handlers rather than leaving the other's behind.
+function showGameCard(title, msg) {
+  $('cardTitle').textContent = title;
+  $('cardMsg').textContent = msg;
+  $('saveBtn').classList.remove('hidden');
+  $('reviewBtn').classList.remove('hidden');
+  $('rematchBtn').textContent = 'Rematch';
+  $('rematchBtn').onclick = function () { startGame(opp, oppIndex); };
+  $('ladderBtn').textContent = 'Back to ladder';
+  $('ladderBtn').onclick = toLadder;
+  $('card').classList.remove('hidden');
+}
+
+function showVariationCard(title, msg) {
+  $('cardTitle').textContent = title;
+  $('cardMsg').textContent = msg;
+  $('saveBtn').classList.add('hidden');        // a variation is never a saved game
+  $('reviewBtn').classList.add('hidden');
+  $('rematchBtn').textContent = 'Try again';
+  $('rematchBtn').onclick = replayVariation;
+  $('ladderBtn').textContent = 'Back to the review';
+  $('ladderBtn').onclick = exitVariation;
+  $('card').classList.remove('hidden');
 }
 
 // ---------- Resign, draw offers, and his resignation ----------
@@ -2908,6 +3080,8 @@ var MAIA = makeNetEngine('maia.worker.js', 'models/maia3_simplified.onnx', '3');
 var ANAND = makeNetEngine('anand.worker.js', 'models/meangirl-8.onnx', '1');
 
 function startGame(o, idx, resume) {
+  variation = null;
+  $('varBanner').classList.add('hidden');
   opp = o; oppIndex = idx;
   game = new Chess();
   over = false; selected = null;
@@ -2998,6 +3172,7 @@ var GAME_KEY = 'current-game';
 var pendingGame = null;
 
 function saveGame() {
+  if (variation) return;      // a variation must never displace your real game
   if (!game || over || !opp) return;
   pendingGame = {
     id: GAME_KEY,
@@ -3052,6 +3227,16 @@ function endGame(reason) {
   else if (game.in_checkmate()) result = game.turn() === oppColor ? 'win' : 'loss';
   else result = 'draw';
 
+  var title;
+  if (reason === 'resign-player') title = 'You resigned';
+  else if (reason === 'resign-opp') title = opp.name + ' resigned';
+  else if (reason === 'draw-agreed') title = 'Draw agreed';
+  else if (game.in_checkmate()) title = 'Checkmate';
+  else title = 'Draw';
+
+  // A variation earns no progress and leaves no record: stop before both.
+  if (variation) { endVariation(title, result); return; }
+
   lastGameRec = {
     id: 'game-' + Date.now(),
     ts: Date.now(),
@@ -3065,13 +3250,7 @@ function endGame(reason) {
   };
   // kept in memory only: saving is your choice, from the card or the review
 
-  var title, msg;
-  if (reason === 'resign-player') title = 'You resigned';
-  else if (reason === 'resign-opp') title = opp.name + ' resigned';
-  else if (reason === 'draw-agreed') title = 'Draw agreed';
-  else if (game.in_checkmate()) title = 'Checkmate';
-  else title = 'Draw';
-
+  var msg;
   if (result === 'win') {
     msg = reason === 'resign-opp'
       ? opp.name + ' (' + opp.rating + ') resigned — the win is yours.'
@@ -3095,14 +3274,14 @@ function endGame(reason) {
 
   clearSavedGame();
   renderSaveButtons();
-  $('cardTitle').textContent = title;
-  $('cardMsg').textContent = msg;
-  $('card').classList.remove('hidden');
+  showGameCard(title, msg);
   renderTabs();
   setStatus('');
 }
 
 function toLadder() {
+  variation = null;
+  $('varBanner').classList.add('hidden');
   if (aiTimer) { clearTimeout(aiTimer); aiTimer = null; }
   aiMoveSeq++;
   $('gameScr').classList.add('hidden');
@@ -3125,9 +3304,9 @@ board.addEventListener('pointerdown', onDown);
 board.addEventListener('pointermove', onMove);
 board.addEventListener('pointerup', onUp);
 board.addEventListener('pointercancel', onUp);
-$('back').onclick = toLadder;
-$('ladderBtn').onclick = toLadder;
-$('rematchBtn').onclick = function () { startGame(opp, oppIndex); };
+$('back').onclick = function () { if (variation) exitVariation(); else toLadder(); };
+// ladderBtn and rematchBtn are bound by showGameCard/showVariationCard instead:
+// their labels and their meaning differ between a game and a variation.
 $('coachBtn').onclick = useCoach;
 $('tbBtn').onclick = useTakeback;
 // A quick tap can outrun :active, so the press also leaves a short pulse.
