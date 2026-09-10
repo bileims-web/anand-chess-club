@@ -4,7 +4,11 @@
  *
  * Protocol (page -> worker):
  *   { cmd: 'init',    id }
- *   { cmd: 'analyse', id, fen, depth, multipv }
+ *   { cmd: 'analyse', id, fen, depth, multipv, movetime, options }
+ *       options: { 'UCI_LimitStrength': true, 'UCI_Elo': 1600, ... } — applied
+ *       as setoption before the search. movetime (ms) replaces the depth limit;
+ *       strength limiting is calibrated against real search, not a depth cap,
+ *       so calibrate.html uses movetime and leaves depth alone.
  *   { cmd: 'abort',   id }   // page-side timeout fired; stop the current search
  *
  * Protocol (worker -> page), always tagged with the request id:
@@ -174,8 +178,13 @@ self.onmessage = function (e) {
     if (current) { reply({ id: m.id, ok: false, error: 'analysis already running' }); return; }
     current = { id: m.id, pvs: [], t0: Date.now(), aborted: false };
     send('setoption name MultiPV value ' + (m.multipv || 1));
+    if (m.options) {
+      Object.keys(m.options).forEach(function (name) {
+        send('setoption name ' + name + ' value ' + m.options[name]);
+      });
+    }
     send('position fen ' + m.fen);
-    send('go depth ' + (m.depth || 12));
+    send(m.movetime ? 'go movetime ' + m.movetime : 'go depth ' + (m.depth || 12));
     return;
   }
 

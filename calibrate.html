@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calibration — Anand Chess Club</title>
+<!-- Same COOP/COEP shim the app uses: Stockfish wants SharedArrayBuffer. -->
+<script src="coi-serviceworker.js"></script>
+<style>
+  :root {
+    --bg: #14161a; --panel: #1b1e24; --line: #2b3038;
+    --ink: #e6e8ec; --dim: #939aa6; --accent: #7fb8a0; --warn: #d59b6a;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1.25rem 5rem; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 54rem; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin: 0 0 .35rem; letter-spacing: -.02em; }
+  p.sub { color: var(--dim); margin: 0 0 1.75rem; max-width: 46ch; }
+  fieldset {
+    border: 1px solid var(--line); border-radius: 6px; padding: 1rem 1.1rem 1.15rem;
+    margin: 0 0 1.25rem; background: var(--panel);
+  }
+  legend { padding: 0 .4rem; color: var(--dim); font-size: .78rem; letter-spacing: .1em; text-transform: uppercase; }
+  label { display: inline-flex; align-items: center; gap: .45rem; margin: 0 1.1rem .5rem 0; font-size: .92rem; }
+  input[type=number] { width: 5rem; background: #0f1115; color: var(--ink); border: 1px solid var(--line); border-radius: 4px; padding: .3rem .4rem; font-family: var(--mono); }
+  select { background: #0f1115; color: var(--ink); border: 1px solid var(--line); border-radius: 4px; padding: .3rem .4rem; }
+  button {
+    background: var(--accent); color: #0f1115; border: 0; border-radius: 5px;
+    padding: .55rem 1.1rem; font-weight: 600; font-size: .95rem; cursor: pointer;
+  }
+  button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  button:disabled { opacity: .45; cursor: default; }
+  #log {
+    font-family: var(--mono); font-size: .8rem; line-height: 1.5; white-space: pre-wrap;
+    background: #0f1115; border: 1px solid var(--line); border-radius: 6px;
+    padding: .9rem 1rem; max-height: 22rem; overflow: auto; color: var(--dim);
+  }
+  table { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: .85rem; margin-top: .5rem; }
+  th { text-align: left; color: var(--dim); font-weight: 500; font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; padding: 0 .8rem .5rem 0; border-bottom: 1px solid var(--line); }
+  td { padding: .45rem .8rem .45rem 0; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+  td.name { font-family: system-ui, sans-serif; color: var(--ink); }
+  .delta-up { color: var(--accent); }
+  .delta-down { color: var(--warn); }
+  pre#out { font-family: var(--mono); font-size: .8rem; background: #0f1115; border: 1px solid var(--line); border-radius: 6px; padding: .9rem 1rem; overflow-x: auto; color: var(--ink); }
+  .row { display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; }
+  .note { color: var(--dim); font-size: .85rem; max-width: 60ch; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Calibration</h1>
+<p class="sub">Every rating on the ladder is a label somebody typed. This plays each
+bot a gauntlet against Stockfish at a known <code>UCI_Elo</code> and reports what
+it is actually worth.</p>
+
+<fieldset>
+  <legend>Run</legend>
+  <div class="row" style="margin-bottom:.75rem">
+    <label>Opponent
+      <select id="who"></select>
+    </label>
+    <label>Games per anchor <input type="number" id="games" value="10" min="2" max="200" step="2"></label>
+    <label>Stockfish ms/move <input type="number" id="movetime" value="50" min="10" max="2000" step="10"></label>
+    <label>Max plies <input type="number" id="maxply" value="200" min="40" max="400" step="20"></label>
+  </div>
+  <div class="row">
+    <button id="run">Run gauntlet</button>
+    <button id="stop" class="ghost" disabled>Stop</button>
+    <button id="clear" class="ghost">Clear log</button>
+  </div>
+  <p class="note" style="margin:.9rem 0 0">
+    Games are split evenly between colours and start from a short random opening
+    ply so the same game isn't played twice. Stockfish anchors at 1320 (its own
+    floor), 1600, 1900 and 2200; the bot's rating is fitted from its score
+    against each anchor it actually got a mixed result from.
+  </p>
+</fieldset>
+
+<fieldset>
+  <legend>Results</legend>
+  <table id="tbl">
+    <thead><tr><th>Bot</th><th>Label</th><th>Measured</th><th>Δ</th><th>Anchors</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <p class="note" style="margin:.9rem 0 .4rem">Paste into <code>MEASURED</code> in <code>bot.js</code>:</p>
+  <pre id="out">var MEASURED = {};</pre>
+</fieldset>
+
+<fieldset>
+  <legend>Log</legend>
+  <div id="log">idle.</div>
+</fieldset>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+<script>var BUILD = 'calibrate';</script>
+<script src="engines.js"></script>
+<script src="bot.js"></script>
+<script>
+'use strict';
+
+// Stockfish's own strength limiter bottoms out here; below it, a bot can only
+// be bounded from above rather than measured.
+var ANCHORS = [1320, 1600, 1900, 2200];
+var SF_FLOOR = 1320;
+
+var $ = function (id) { return document.getElementById(id); };
+var stopping = false, running = false;
+var results = {};
+
+function log(line) {
+  var el = $('log');
+  if (el.textContent === 'idle.') el.textContent = '';
+  el.textContent += line + '\n';
+  el.scrollTop = el.scrollHeight;
+}
+
+// ---------- one game ----------
+// The bot picks exactly as it does in the app: same policy, same temperature,
+// same nucleus, same blunder filter. Stockfish replies at a fixed UCI_Elo.
+// Returns the bot's score: 1, 0.5 or 0.
+function playGame(bot, engine, anchorElo, botIsWhite, openingPlies, movetime, maxPly) {
+  var g = new Chess();
+
+  // A few random legal plies so the gauntlet isn't one game repeated.
+  for (var i = 0; i < openingPlies; i++) {
+    var ms = g.moves();
+    if (!ms.length) break;
+    g.move(ms[Math.floor(Math.random() * ms.length)]);
+  }
+  if (g.game_over()) return Promise.resolve(0.5);
+
+  var botColor = botIsWhite ? 'w' : 'b';
+
+  function step() {
+    if (stopping) return Promise.resolve(null);
+    if (g.game_over() || g.history().length >= maxPly) {
+      if (g.in_checkmate()) return Promise.resolve(g.turn() === botColor ? 0 : 1);
+      return Promise.resolve(0.5);   // draw, or adjudicated as one at the ply cap
+    }
+    return (g.turn() === botColor ? botMove() : sfMove()).then(function (ok) {
+      if (!ok) return 0.5;           // engine trouble: score the game a draw
+      return step();
+    });
+  }
+
+  function botMove() {
+    var fen = g.fen();
+    // elo_oppo is the anchor: the bot is told, truthfully, how strong its
+    // opponent is — the same thing the app now does with your live rating.
+    return engine.evaluate(fen, bot.rating, anchorElo).then(function (r) {
+      if (!r.moves || !r.moves.length) return false;
+      var uci = chooseMaiaMove(r.moves, bot.offLadder ? ANAND_TEMPERATURE : MAIA_TEMPERATURE);
+      var pick = bot.offLadder ? anandFilter(fen, r.moves, uci) : Promise.resolve(uci);
+      return pick.then(function (chosen) { return apply(chosen); });
+    }, function () { return false; });
+  }
+
+  function sfMove() {
+    return SF.analyse(g.fen(), {
+      movetime: movetime,
+      multipv: 1,
+      timeout: Math.max(15000, movetime * 40),
+      options: { 'UCI_LimitStrength': 'true', 'UCI_Elo': anchorElo }
+    }).then(function (res) {
+      return apply(res.bestmove);
+    }, function () { return false; });
+  }
+
+  function apply(uci) {
+    if (!uci || uci === '(none)') return false;
+    var mv = g.move({
+      from: uci.slice(0, 2), to: uci.slice(2, 4),
+      promotion: uci.length > 4 ? uci.slice(4) : undefined
+    });
+    return !!mv;
+  }
+
+  return step();
+}
+
+// ---------- rating from a set of scores ----------
+// Each anchor gives an independent estimate: rating = anchor + 400*log10(s/(1-s)).
+// A clean sweep (0 or 1) has no finite estimate, so it only bounds the answer;
+// we keep those aside and average the anchors that produced a real result.
+function fitRating(rows) {
+  var ests = [], bounds = [];
+  rows.forEach(function (r) {
+    var s = r.score / r.games;
+    if (s <= 0) { bounds.push({ dir: 'below', v: r.anchor }); return; }
+    if (s >= 1) { bounds.push({ dir: 'above', v: r.anchor }); return; }
+    ests.push({
+      anchor: r.anchor,
+      elo: r.anchor + 400 * Math.log10(s / (1 - s)),
+      n: r.games
+    });
+  });
+  if (ests.length) {
+    var wsum = 0, w = 0;
+    ests.forEach(function (e) { wsum += e.elo * e.n; w += e.n; });
+    return { elo: Math.round(wsum / w), ests: ests, bounds: bounds, exact: true };
+  }
+  // No mixed result anywhere: report the tightest bound we can defend.
+  var below = bounds.filter(function (b) { return b.dir === 'below'; })
+                    .map(function (b) { return b.v; });
+  var above = bounds.filter(function (b) { return b.dir === 'above'; })
+                    .map(function (b) { return b.v; });
+  if (below.length) return { elo: Math.min.apply(null, below) - 200, ests: [], bounds: bounds, exact: false };
+  if (above.length) return { elo: Math.max.apply(null, above) + 200, ests: [], bounds: bounds, exact: false };
+  return { elo: null, ests: [], bounds: bounds, exact: false };
+}
+
+// ---------- the gauntlet ----------
+function runOne(bot, cfg) {
+  var engine = bot.offLadder ? ANAND : MAIA;
+  log('');
+  log('=== ' + bot.name + ' (labelled ' + bot.rating + ') ===');
+
+  return engine.init(function (st) { log('  net: ' + st); }).then(function () {
+    return SF.init();
+  }).then(function () {
+    var rows = [];
+    var chain = Promise.resolve();
+    ANCHORS.forEach(function (anchor) {
+      chain = chain.then(function () {
+        if (stopping) return;
+        var score = 0, played = 0;
+        var inner = Promise.resolve();
+        for (var i = 0; i < cfg.games; i++) {
+          (function (idx) {
+            inner = inner.then(function () {
+              if (stopping) return;
+              return playGame(bot, engine, anchor, idx % 2 === 0,
+                              2 + Math.floor(Math.random() * 5),
+                              cfg.movetime, cfg.maxPly)
+                .then(function (s) {
+                  if (s === null) return;
+                  score += s; played++;
+                  log('  vs SF ' + anchor + '  game ' + (idx + 1) + '/' + cfg.games +
+                      '  ' + (s === 1 ? 'win ' : s === 0 ? 'loss' : 'draw') +
+                      '   running ' + score + '/' + played);
+                });
+            });
+          })(i);
+        }
+        return inner.then(function () {
+          if (played) rows.push({ anchor: anchor, score: score, games: played });
+        });
+      });
+    });
+    return chain.then(function () { return rows; });
+  }).then(function (rows) {
+    if (!rows.length) return null;
+    var fit = fitRating(rows);
+    results[bot.name] = { fit: fit, rows: rows, label: bot.rating };
+    log('  → ' + (fit.elo === null ? 'no estimate' :
+        (fit.exact ? 'measured ' + fit.elo : 'bounded ≈ ' + fit.elo)) +
+        '   (label ' + bot.rating + ')');
+    render();
+    return fit;
+  });
+}
+
+function render() {
+  var tb = $('tbl').querySelector('tbody');
+  tb.innerHTML = '';
+  var lines = [];
+  Object.keys(results).forEach(function (name) {
+    var r = results[name];
+    var d = r.fit.elo === null ? null : r.fit.elo - r.label;
+    var tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td class="name">' + name + '</td>' +
+      '<td>' + r.label + '</td>' +
+      '<td>' + (r.fit.elo === null ? '—' : (r.fit.exact ? '' : '≈ ') + r.fit.elo) + '</td>' +
+      '<td class="' + (d === null ? '' : d >= 0 ? 'delta-up' : 'delta-down') + '">' +
+        (d === null ? '—' : (d > 0 ? '+' : '') + d) + '</td>' +
+      '<td>' + r.rows.map(function (x) {
+        return x.anchor + ':' + x.score + '/' + x.games;
+      }).join('  ') + '</td>';
+    tb.appendChild(tr);
+    if (r.fit.elo !== null) lines.push("  '" + name + "': " + r.fit.elo + ",");
+  });
+  $('out').textContent = 'var MEASURED = {\n' + lines.join('\n') + '\n};';
+}
+
+// ---------- wiring ----------
+var ALL = LEVELS.concat([MEAN_GIRL]);
+(function () {
+  var sel = $('who');
+  var all = document.createElement('option');
+  all.value = '*'; all.textContent = 'Everyone (long run)';
+  sel.appendChild(all);
+  ALL.forEach(function (o, i) {
+    var op = document.createElement('option');
+    op.value = String(i);
+    op.textContent = o.name + ' (' + o.rating + ')';
+    sel.appendChild(op);
+  });
+})();
+
+$('clear').onclick = function () { $('log').textContent = 'idle.'; };
+$('stop').onclick = function () { stopping = true; log('\nstopping after the current game…'); };
+
+$('run').onclick = function () {
+  if (running) return;
+  running = true; stopping = false;
+  $('run').disabled = true; $('stop').disabled = false;
+
+  var cfg = {
+    games: Math.max(2, parseInt($('games').value, 10) || 10),
+    movetime: Math.max(10, parseInt($('movetime').value, 10) || 50),
+    maxPly: Math.max(40, parseInt($('maxply').value, 10) || 200)
+  };
+  var pick = $('who').value;
+  var list = pick === '*' ? ALL : [ALL[parseInt(pick, 10)]];
+
+  log('Stockfish floor is UCI_Elo ' + SF_FLOOR + '; anchors ' + ANCHORS.join(', ') + '.');
+
+  var chain = Promise.resolve();
+  list.forEach(function (bot) {
+    chain = chain.then(function () { if (!stopping) return runOne(bot, cfg); });
+  });
+  chain.catch(function (err) {
+    log('ERROR: ' + (err && err.message ? err.message : err));
+  }).then(function () {
+    running = false; stopping = false;
+    $('run').disabled = false; $('stop').disabled = true;
+    log('\ndone.');
+  });
+};
+</script>
+</body>
+</html>

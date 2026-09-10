@@ -445,6 +445,7 @@
   <button class="row" id="historyBtn">
     <span class="nm">Past Games</span><span class="rt" id="historyCount"></span>
   </button>
+  <p class="spend" id="relockNote"></p>
   <p class="spend" id="ladderSpend"></p>
   <p class="spend" id="buildTag"></p>
 </section>
@@ -597,23 +598,12 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
 <script src="pieces.js"></script>
+<script src="engines.js"></script>
+<script src="bot.js"></script>
 <script>
 'use strict';
 
 // ---------- Data (all state lives in memory only) ----------
-var LEVELS = [
-  { name: 'The New Kid',     rating: 700 },
-  { name: 'Coffee House',    rating: 800 },
-  { name: 'Book Learner',    rating: 900 },
-  { name: 'Tactics Grinder', rating: 1000 },
-  { name: 'Weekend Warrior', rating: 1100 },
-  { name: 'Club Regular',    rating: 1200 },
-  { name: 'Board One',       rating: 1300 },
-  { name: 'The Ringer',      rating: 1400 },
-  { name: 'Prize Winner',    rating: 1600 },
-  { name: 'The Champion',    rating: 1900 }
-];
-var MEAN_GIRL = { name: 'Anand', rating: 2700, offLadder: true, avatarKind: 'disguise' };
 var GLYPH = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
 var PIECE_CHOICES = [
   { id: 'classic',  name: 'Classic' },
@@ -708,7 +698,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-08-30.1';
+var BUILD = '2026-09-10.1';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -810,6 +800,16 @@ function forgetApiKey() {
 var STATE_KEY = 'app-state';
 var stateLoaded = false;
 
+// Bumped whenever a change makes the opponents play differently. Progress won
+// against the old ones doesn't carry: the ladder relocks and your rating goes
+// back to the starting 1000, because both were earned against bots that no
+// longer exist. Beating them again means something different now.
+//   1 — original: ladder sampled at T=1, Anand unfiltered
+//   2 — tail cut at top-p 0.92 / T=0.7, Anand screened by Stockfish
+var LADDER_EPOCH = 2;
+
+var relocked = false;   // set by loadState when the epoch moved on
+
 function renderSpend() {
   $('ladderSpend').textContent = spendTotal
     ? 'Coach & review so far: ' + fmtSpend(spendTotal) : '';
@@ -820,21 +820,27 @@ function saveState() {
   idbPut({
     id: STATE_KEY,
     progress: progress,
+    epoch: LADDER_EPOCH,
     theme: document.body.dataset.theme,
     pieceSet: pieceSet,
     coordsOn: coordsOn,
     color: chosenColor,
-    spendTotal: spendTotal
+    spendTotal: spendTotal,
+    playerElo: PLAYER_ELO
   }).catch(function () {});   // private mode / quota: play on unsaved
 }
 
 function loadState() {
   return idbGet(STATE_KEY).then(function (st) {
     if (!st) return;
+    // Progress and rating only carry across if they were won against the
+    // opponents we still ship. A stale epoch relocks the whole ladder.
+    var sameEpoch = (st.epoch || 1) === LADDER_EPOCH;
     // never regress: if a level was won before this read landed, keep it
-    if (typeof st.progress === 'number' && st.progress >= 0) {
+    if (sameEpoch && typeof st.progress === 'number' && st.progress >= 0) {
       progress = Math.max(progress, Math.min(st.progress, LEVELS.length));
     }
+    if (!sameEpoch) relocked = true;
     if (isTheme(st.theme)) document.body.dataset.theme = st.theme;
     if (isPieceSet(st.pieceSet)) pieceSet = st.pieceSet;
     if (typeof st.coordsOn === 'boolean') {
@@ -845,12 +851,26 @@ function loadState() {
     if (typeof st.spendTotal === 'number' && isFinite(st.spendTotal)) {
       spendTotal += st.spendTotal;   // add, in case a call already billed
     }
+    if (sameEpoch && typeof st.playerElo === 'number' && isFinite(st.playerElo)) {
+      PLAYER_ELO = Math.max(PLAYER_ELO_MIN, Math.min(PLAYER_ELO_MAX, st.playerElo));
+    }
   }).catch(function () {}).then(function () {
     return loadGame();
   }).then(function () {
     return idbGetGames().then(function (g) { gameHistory = g; }).catch(function () {});
   }).then(function () {
     stateLoaded = true;
+    if (relocked) {
+      // The unfinished game was against an opponent that no longer plays
+      // that way; there is nothing honest to resume into.
+      pendingGame = null;
+      clearSavedGame();
+      saveState();          // stamp the new epoch so this happens once
+      $('relockNote').textContent =
+        'The club got stronger — everyone plays sharper now, and Anand no ' +
+        'longer hands you pieces. The ladder has been relocked and your ' +
+        'rating reset to 1000. Beat them again.';
+    }
     renderLadder();
     renderSpend();
     // Reopening the app puts you back in the game you were playing, rather
@@ -869,9 +889,9 @@ function renderLadder() {
     var b = document.createElement('button');
     var state = i < progress ? 'beaten' : (i === progress ? 'current' : 'locked');
     b.className = 'row ' + state;
-    b.innerHTML = avatarHtml(lv.rating, lv.avatar, false, i, lv.name) +
+    b.innerHTML = avatarHtml(ratingFor(lv), lv.avatar, false, i, lv.name) +
                   '<span class="nm">' + lv.name + '</span>' +
-                  '<span class="rt">' + lv.rating + '</span>' +
+                  '<span class="rt">' + ratingFor(lv) + '</span>' +
                   '<span class="st">' + (state === 'beaten' ? '✓' : (state === 'locked' ? 'Locked' : '')) + '</span>';
     if (state !== 'locked') b.onclick = function () { openStartDialog(lv, i); };
     else b.disabled = true;
@@ -883,9 +903,9 @@ function renderLadder() {
   box.appendChild(div);
   var mg = document.createElement('button');
   mg.className = 'row mg';
-  mg.innerHTML = avatarHtml(MEAN_GIRL.rating, MEAN_GIRL.avatar, false, MEAN_GIRL.avatarKind) +
+  mg.innerHTML = avatarHtml(ratingFor(MEAN_GIRL), MEAN_GIRL.avatar, false, MEAN_GIRL.avatarKind) +
                  '<span class="nm">' + MEAN_GIRL.name + '</span>' +
-                 '<span class="rt">' + MEAN_GIRL.rating + '</span><span class="st"></span>';
+                 '<span class="rt">' + ratingFor(MEAN_GIRL) + '</span><span class="st"></span>';
   mg.onclick = function () { openStartDialog(MEAN_GIRL, -1); };
   box.appendChild(mg);
 }
@@ -1057,44 +1077,25 @@ function tryPlayerMove(from, to) {
   return true;
 }
 
-// ---------- Maia opponent ----------
-// The net's policy is the move choice — no search (it would destroy the
-// human-like play). Variety comes from temperature + nucleus (top-p)
-// sampling over the policy, applied to the whole game, mirroring the
-// Temperature/TopP controls of the Maia 3 UCI engine.
-// Maia is calibrated to reproduce human play, so it samples its policy
-// as-is (T=1). Anand's net is not a human model — sampling it at 1.0
-// just adds noise (early h-pawn pushes were 0.8% tail moves), so he
-// plays close to argmax with only top-move-level variety.
-var MAIA_TEMPERATURE = 1.0;   // ladder: the human distribution, unmodified
-var ANAND_TEMPERATURE = 0.3;  // Anand: sharp; ~90% top move, tail crushed
-var MAIA_TOP_P = 1.0;         // 1 = disabled (no tail cut)
-var PLAYER_ELO = 1000;        // fed as elo_oppo (rough player strength)
-var aiMoveSeq = 0;            // invalidates in-flight evals on new game / takeback
+var aiMoveSeq = 0;   // invalidates in-flight evals on new game / takeback
 
-function chooseMaiaMove(moves, temperature) {
-  if (temperature <= 0) return moves[0][0];
-  // Nucleus: smallest prefix of the sorted policy with mass >= MAIA_TOP_P.
-  var nucleus = [];
-  var mass = 0;
-  for (var i = 0; i < moves.length; i++) {
-    nucleus.push(moves[i]);
-    mass += moves[i][1];
-    if (mass >= MAIA_TOP_P) break;
-  }
-  // Temperature: p^(1/T), renormalised, then sample.
-  var sum = 0;
-  var weights = nucleus.map(function (m) {
-    var w = Math.pow(m[1], 1 / temperature);
-    sum += w;
-    return w;
-  });
-  var r = Math.random() * sum;
-  for (var j = 0; j < nucleus.length; j++) {
-    r -= weights[j];
-    if (r <= 0) return nucleus[j][0];
-  }
-  return nucleus[nucleus.length - 1][0];
+// ---------- Player strength ----------
+// Maia 3 conditions on BOTH ratings: elo_self picks the level it plays at,
+// elo_oppo picks how carefully it plays against you. This used to be pinned
+// at 1000 for everyone, which asked every opponent to play the way a human
+// plays against a weak player. It now tracks your actual results (standard
+// Elo, K=32) and is persisted with the rest of the app state.
+var PLAYER_ELO_START = 1000;
+var PLAYER_ELO_MIN = 600, PLAYER_ELO_MAX = 2400, PLAYER_ELO_K = 32;
+var PLAYER_ELO = PLAYER_ELO_START;   // fed as elo_oppo
+
+// score: 1 win, 0.5 draw, 0 loss, against an opponent of oppRating.
+function updatePlayerElo(oppRating, score) {
+  var expected = 1 / (1 + Math.pow(10, (oppRating - PLAYER_ELO) / 400));
+  var next = PLAYER_ELO + PLAYER_ELO_K * (score - expected);
+  PLAYER_ELO = Math.round(Math.max(PLAYER_ELO_MIN, Math.min(PLAYER_ELO_MAX, next)));
+  saveState();
+  return PLAYER_ELO;
 }
 
 function oppEngine() { return opp && opp.offLadder ? ANAND : MAIA; }
@@ -1112,19 +1113,25 @@ function aiMove() {
     // his own read of the position, from his side (value is White's chance)
     oppWinPct = oppColor === 'w' ? r.value * 100 : 100 - r.value * 100;
     var uci = chooseMaiaMove(r.moves, opp.offLadder ? ANAND_TEMPERATURE : MAIA_TEMPERATURE);
-    // keep a touch of think time so instant cached replies still feel human
-    var delay = Math.max(0, 400 + Math.random() * 500 - (performance.now() - t0));
-    setTimeout(function () {
+    var fen = game.fen();
+    var pick = opp.offLadder ? anandFilter(fen, r.moves, uci) : Promise.resolve(uci);
+    return pick.then(function (chosen) {
+      uci = chosen;
       if (over || seq !== aiMoveSeq || game.turn() !== oppColor) return;
-      var mv = game.move({
-        from: uci.slice(0, 2),
-        to: uci.slice(2, 4),
-        promotion: uci.length > 4 ? uci.slice(4) : undefined
-      });
-      if (!mv) mv = game.move(game.moves()[0]);  // should never happen
-      animateMove(mv);
-      afterMove(mv);
-    }, delay);
+      // keep a touch of think time so instant cached replies still feel human
+      var delay = Math.max(0, 400 + Math.random() * 500 - (performance.now() - t0));
+      setTimeout(function () {
+        if (over || seq !== aiMoveSeq || game.turn() !== oppColor) return;
+        var mv = game.move({
+          from: uci.slice(0, 2),
+          to: uci.slice(2, 4),
+          promotion: uci.length > 4 ? uci.slice(4) : undefined
+        });
+        if (!mv) mv = game.move(game.moves()[0]);  // should never happen
+        animateMove(mv);
+        afterMove(mv);
+      }, delay);
+    });
   }).catch(function (err) {
     if (seq !== aiMoveSeq) return;
     setStatus(netLabel() + ': ' + err.message + ' — retrying…');
@@ -1283,12 +1290,6 @@ var COACH_JSON_RULE =
 function winPct(cp) {
   return 50 + 50 * (2 / (1 + Math.exp(-0.00368208 * cp)) - 1);
 }
-function pvToCp(pv) {   // SF pv entry -> centipawns from the side to move
-  if (!pv) return 0;
-  if (pv.mate !== null && pv.mate !== undefined) return pv.mate > 0 ? 10000 : -10000;
-  return pv.cp;
-}
-
 function sanLine(fen, ucis, maxPlies) {
   var g = new Chess(fen);
   var out = [];
@@ -2703,7 +2704,7 @@ function playVariation(m) {
   $('oppAv').innerHTML = avatarHtml(MEAN_GIRL.rating, MEAN_GIRL.avatar, true,
     MEAN_GIRL.avatarKind, MEAN_GIRL.name);
   $('oppName').textContent = MEAN_GIRL.name;
-  $('oppRt').textContent = MEAN_GIRL.rating;
+  $('oppRt').textContent = ratingFor(MEAN_GIRL);
   $('varBanner').textContent = 'Variation · you played ' + m.san + ' here';
   $('varBanner').classList.remove('hidden');
   $('reviewScr').classList.add('hidden');
@@ -2880,205 +2881,6 @@ function setStatus(t) {
   s.textContent = t;
 }
 
-// ---------- Stockfish ----------
-// Engine runs in stockfish.worker.js; nothing here blocks the main thread.
-// Every request carries a timeout so a hung worker can never freeze the board.
-var SF = (function () {
-  var worker = null, nextId = 1, pending = {}, initPromise = null, queue = Promise.resolve();
-  var info = { engine: null, threads: 0 };
-
-  function ensureWorker() {
-    if (worker) return;
-    worker = new Worker('stockfish.worker.js?v=' + BUILD);
-    worker.onmessage = function (e) {
-      var m = e.data || {};
-      var p = pending[m.id];
-      if (!p) return;
-      delete pending[m.id];
-      clearTimeout(p.timer);
-      if (m.ok) p.resolve(m); else p.reject(new Error(m.error || 'engine error'));
-    };
-    worker.onerror = function (e) {
-      var err = new Error(e.message || 'engine worker crashed');
-      Object.keys(pending).forEach(function (id) {
-        clearTimeout(pending[id].timer);
-        pending[id].reject(err);
-        delete pending[id];
-      });
-      try { worker.terminate(); } catch (ignore) {}
-      worker = null;
-      initPromise = null;
-    };
-  }
-
-  function call(msg, timeoutMs) {
-    ensureWorker();
-    return new Promise(function (resolve, reject) {
-      var id = nextId++;
-      msg.id = id;
-      pending[id] = {
-        resolve: resolve,
-        reject: reject,
-        timer: setTimeout(function () {
-          delete pending[id];
-          if (worker) worker.postMessage({ cmd: 'abort', id: id });
-          reject(new Error(msg.cmd + ' timed out'));
-        }, timeoutMs)
-      };
-      worker.postMessage(msg);
-    });
-  }
-
-  // Resolves after the UCI handshake (uciok then readyok) completes in the worker.
-  function init() {
-    if (!initPromise) {
-      initPromise = call({ cmd: 'init' }, 60000).then(function (m) {
-        info.engine = m.engine;
-        info.threads = m.threads;
-        return info;
-      }, function (err) {
-        initPromise = null;
-        throw err;
-      });
-    }
-    return initPromise;
-  }
-
-  // analyse(fen, {depth, multipv, timeout}) -> {bestmove, ponder, pvs, timeMs}
-  // pvs: [{multipv, move, cp, mate, line, depth}], scores from the side to move.
-  // Calls are serialised: the engine searches one position at a time.
-  function analyse(fen, opts) {
-    opts = opts || {};
-    var job = queue.then(function () {
-      return init().then(function () {
-        return call({
-          cmd: 'analyse',
-          fen: fen,
-          depth: opts.depth || 12,
-          multipv: opts.multipv || 1
-        }, opts.timeout || 120000);
-      });
-    });
-    queue = job.then(function () {}, function () {});
-    return job;
-  }
-
-  return { init: init, analyse: analyse, info: info };
-})();
-
-// ---------- Neural-net engines ----------
-// Each net runs in its own worker (ONNX, off the main thread) and is
-// cached in IndexedDB after first download. Same worker protocol for both.
-function makeNetEngine(workerFile, modelUrl, modelVersion) {
-  var worker = null, nextId = 1, pending = {}, readyPromise = null;
-  var statusCb = null, progressCb = null;
-
-  function ensureWorker() {
-    if (worker) return;
-    // ?v= so a page update can never run last build's cached worker
-    worker = new Worker(workerFile + '?v=' + BUILD);
-    worker.onmessage = function (e) {
-      var m = e.data || {};
-      if (readyPromise && (m.type === 'status' || m.type === 'progress')) {
-        readyPromise.beat = Date.now();
-      }
-      if (m.type === 'status') {
-        if (m.status === 'no-cache') worker.postMessage({ type: 'download' });
-        if (m.status === 'ready' && readyPromise && readyPromise.resolve) readyPromise.resolve();
-        if (statusCb) statusCb(m.status);
-      }
-      if (m.type === 'progress' && progressCb) progressCb(m.progress);
-      if (m.type === 'eval-result' || (m.type === 'error' && m.id !== undefined)) {
-        var p = pending[m.id];
-        if (!p) return;
-        delete pending[m.id];
-        clearTimeout(p.timer);
-        if (m.type === 'eval-result') p.resolve(m); else p.reject(new Error(m.message));
-      } else if (m.type === 'error') {
-        if (readyPromise && readyPromise.reject) readyPromise.reject(new Error(m.message));
-      }
-    };
-    worker.onerror = function (e) {
-      var err = new Error(e.message || 'maia worker crashed');
-      if (readyPromise && readyPromise.reject) readyPromise.reject(err);
-      Object.keys(pending).forEach(function (id) {
-        clearTimeout(pending[id].timer);
-        pending[id].reject(err);
-        delete pending[id];
-      });
-      try { worker.terminate(); } catch (ignore) {}
-      worker = null;
-      readyPromise = null;
-    };
-  }
-
-  // init(onStatus, onProgress) resolves when the model is loaded,
-  // downloading it (with progress callbacks) if it isn't cached yet.
-  // Later calls refresh the callbacks; a failed init can be retried.
-  function init(onStatus, onProgress) {
-    if (onStatus) statusCb = onStatus;
-    if (onProgress) progressCb = onProgress;
-    if (readyPromise) return readyPromise.promise;
-    ensureWorker();
-    var box = {};
-    box.beat = Date.now();   // stamped again on every status/progress message
-    box.promise = new Promise(function (resolve, reject) {
-      box.resolve = resolve;
-      box.reject = reject;
-      worker.postMessage({
-        type: 'init',
-        modelUrl: modelUrl,
-        modelVersion: modelVersion
-      });
-      // A healthy load reports in constantly. Prolonged silence means it
-      // is wedged — say so quickly rather than spinning for five minutes.
-      var watch = setInterval(function () {
-        if (Date.now() - box.beat > 45000) {
-          clearInterval(watch);
-          reject(new Error('model load stalled'));
-        }
-      }, 5000);
-      box.settle = function () { clearInterval(watch); };
-    });
-    box.promise = box.promise.then(function (v) {
-      box.settle();
-      return v;
-    }, function (err) {
-      box.settle();
-      readyPromise = null;   // allow a retry
-      if (worker && /stalled/.test(err.message)) {
-        // a wedged worker never recovers; the retry gets a fresh one
-        try { worker.terminate(); } catch (ignore) {}
-        worker = null;
-      }
-      throw err;
-    });
-    readyPromise = box;
-    return box.promise;
-  }
-
-  // evaluate(fen, eloSelf, eloOppo) -> {moves: [[uci, prob], ...] sorted, value}
-  function evaluate(fen, eloSelf, eloOppo) {
-    return new Promise(function (resolve, reject) {
-      var id = nextId++;
-      pending[id] = {
-        resolve: resolve,
-        reject: reject,
-        timer: setTimeout(function () {
-          delete pending[id];
-          reject(new Error('maia eval timed out'));
-        }, 30000)
-      };
-      worker.postMessage({ type: 'eval', id: id, fen: fen, eloSelf: eloSelf, eloOppo: eloOppo });
-    });
-  }
-
-  return { init: init, evaluate: evaluate };
-}
-
-var MAIA = makeNetEngine('maia.worker.js', 'models/maia3_simplified.onnx', '3');
-var ANAND = makeNetEngine('anand.worker.js', 'models/meangirl-8.onnx', '1');
-
 function startGame(o, idx, resume) {
   variation = null;
   $('varBanner').classList.add('hidden');
@@ -3093,6 +2895,10 @@ function startGame(o, idx, resume) {
   oppColor = playerColor === 'w' ? 'b' : 'w';
   resignOffered = false; oppLostStreak = 0; oppWinPct = 50;
   coachedFens = {};
+  // Anand screens his own moves through Stockfish, so it sits on the critical
+  // path for his very first reply now. Start it loading with the board rather
+  // than making you wait on 7MB of wasm mid-move.
+  if (o.offLadder) SF.init().catch(function () {});
   if (resume) {
     // replay the saved moves; anything illegal means a stale record
     for (var ri = 0; ri < resume.sans.length; ri++) {
@@ -3114,7 +2920,7 @@ function startGame(o, idx, resume) {
   $('oppAv').innerHTML = avatarHtml(o.rating, o.avatar, true,
     o.offLadder ? o.avatarKind : idx, o.name);
   $('oppName').textContent = o.name;
-  $('oppRt').textContent = o.rating;
+  $('oppRt').textContent = ratingFor(o);
   $('ladder').classList.add('hidden');
   $('gameScr').classList.remove('hidden');
   $('card').classList.add('hidden');
@@ -3145,11 +2951,11 @@ function openStartDialog(o, idx) {
   var elsewhere = !!pendingGame && pendingGame.oppIndex !== idx;
   $('startTitle').textContent = o.name;
   $('startMsg').textContent = resumable
-    ? 'Rated ' + o.rating + '. Pick up your unfinished game, or start again as White or Black.'
+    ? 'Rated ' + ratingFor(o) + '. Pick up your unfinished game, or start again as White or Black.'
     : (elsewhere
-        ? 'Rated ' + o.rating + '. Starting here ends your unfinished game against ' +
+        ? 'Rated ' + ratingFor(o) + '. Starting here ends your unfinished game against ' +
           pendingGame.oppName + '.'
-        : 'Rated ' + o.rating + '. Which colour do you want?');
+        : 'Rated ' + ratingFor(o) + '. Which colour do you want?');
   $('startResume').classList.toggle('hidden', !resumable);
   $('startDlg').classList.remove('hidden');
 }
@@ -3237,6 +3043,10 @@ function endGame(reason) {
   // A variation earns no progress and leaves no record: stop before both.
   if (variation) { endVariation(title, result); return; }
 
+  // Your rating moves on every played-out game, win or lose. It is what the
+  // next opponent is told about you (elo_oppo), so it has to track reality.
+  updatePlayerElo(ratingFor(opp), result === 'win' ? 1 : result === 'draw' ? 0.5 : 0);
+
   lastGameRec = {
     id: 'game-' + Date.now(),
     ts: Date.now(),
@@ -3253,15 +3063,15 @@ function endGame(reason) {
   var msg;
   if (result === 'win') {
     msg = reason === 'resign-opp'
-      ? opp.name + ' (' + opp.rating + ') resigned — the win is yours.'
-      : 'You beat ' + opp.name + ' (' + opp.rating + ')!';
+      ? opp.name + ' (' + ratingFor(opp) + ') resigned — the win is yours.'
+      : 'You beat ' + opp.name + ' (' + ratingFor(opp) + ')!';
     if (opp.offLadder) {
       msg += ' Anand’s not on the ladder — bragging rights only.';
     } else if (oppIndex === progress) {
       progress++;
       saveState();
       msg += progress < LEVELS.length
-        ? ' ' + LEVELS[progress].name + ' (' + LEVELS[progress].rating + ') is now unlocked.'
+        ? ' ' + LEVELS[progress].name + ' (' + ratingFor(LEVELS[progress]) + ') is now unlocked.'
         : ' You’ve cleared the whole ladder!';
     }
   } else if (result === 'loss') {
@@ -3296,6 +3106,7 @@ function toLadder() {
 // ---------- Wire up ----------
 buildSquares();
 renderLadder();
+applyMeasured();
 loadState();
 $('buildTag').textContent = 'build ' + BUILD;
 setTimeout(checkFresh, 1200);
