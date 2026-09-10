@@ -713,7 +713,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-09-10.2';
+var BUILD = '2026-09-10.3';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -1132,11 +1132,11 @@ function aiMove() {
     // his own read of the position, from his side (value is White's chance)
     oppWinPct = oppColor === 'w' ? r.value * 100 : 100 - r.value * 100;
     var fen = game.fen();
-    var uci = chooseBotMove(fen, r.moves, opp);
-    // screenFor decides how tight this opponent's veto is; the bottom rungs
-    // get none, and screenMove hands the sampled move straight back.
-    var pick = screenMove(fen, r.moves, uci, screenFor(opp));
-    return pick.then(function (chosen) {
+    var uci;
+    // One door for the app and the calibrator alike: a rung samples its net
+    // and Stockfish vetoes what it must, while Anand has the engine propose
+    // first and picks from that.
+    return decideMove(fen, r.moves, opp).then(function (chosen) {
       uci = chosen;
       if (over || seq !== aiMoveSeq || game.turn() !== oppColor) return;
       // keep a touch of think time so instant cached replies still feel human

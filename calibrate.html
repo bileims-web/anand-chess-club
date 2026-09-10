@@ -156,9 +156,7 @@ function playGame(bot, engine, anchorElo, botIsWhite, openingPlies, movetime, ma
     // opponent is — the same thing the app now does with your live rating.
     return engine.evaluate(fen, bot.rating, anchorElo).then(function (r) {
       if (!r.moves || !r.moves.length) return false;
-      var uci = chooseBotMove(fen, r.moves, bot);
-      var pick = screenMove(fen, r.moves, uci, screenFor(bot));
-      return pick.then(function (chosen) { return apply(chosen); });
+      return decideMove(fen, r.moves, bot).then(function (chosen) { return apply(chosen); });
     }, function () { return false; });
   }
 

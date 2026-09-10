@@ -124,7 +124,7 @@ var LEVELS = [
 // survivor, so a tilt on the sampled move would be theatre. His personality
 // is that he is better than you, and he is nice about it.
 var MEAN_GIRL = { name: 'Anand', rating: 2700, offLadder: true, avatarKind: 'disguise',
-  aggression: 0, lines: {
+  aggression: 0, engineFirst: true, lines: {
     hello:   ['Shall we?', 'Take your time. I have some.'],
     capture: ['Necessary.', 'Thank you.'],
     check:   ['Check.', 'Your king, please.'],
@@ -287,6 +287,54 @@ function chooseBotMove(fen, moves, o) {
 }
 
 
+// ---------- Anand: the engine proposes, his net picks ----------
+// His net is 1.7MB and searches nothing, so asked for a move on its own it
+// plays club chess with a 2700 on the card. Screening it harder cannot close
+// that gap: a veto removes blunders, it does not find plans.
+//
+// So for him alone the arrangement is inverted. Stockfish — held at the same
+// UCI_Elo the calibrator anchors the ladder against — proposes the moves, and
+// everything within a margin of its best goes to his net, which plays the one
+// HE ranks highest. The engine sets the standard, the net keeps the style.
+//
+// Be careful what this claims. The CANDIDATES are 2700; the pick among them is
+// his own, so his real strength sits a little under the number on the card.
+// The margin is what that costs, which is why it is tight.
+var ANAND_ELO = 2700;
+var ANAND_MULTIPV = 6;
+var ANAND_DEPTH = 12;
+var ANAND_MARGIN = 60;    // cp behind the engine's best, still his to choose
+
+// Resolves to a uci string, or null if the engine could not answer — the
+// caller then falls back to his net alone. Nothing may stop him moving.
+function anandPick(fen, moves) {
+  var pOf = {};
+  for (var i = 0; i < moves.length; i++) pOf[moves[i][0]] = moves[i][1];
+
+  return SF.init().then(function () {
+    return SF.analyse(fen, {
+      depth: ANAND_DEPTH, multipv: ANAND_MULTIPV, timeout: 15000,
+      options: { 'UCI_LimitStrength': 'true', 'UCI_Elo': String(ANAND_ELO) }
+    });
+  }).then(function (res) {
+    var pvs = (res && res.pvs) || [];
+    var cand = [];
+    for (var j = 0; j < pvs.length; j++) {
+      // cp is from the side to move, which on his own move is his side —
+      // no negation here, unlike the veto, which scores AFTER a move.
+      if (pvs[j] && pvs[j].move) cand.push({ uci: pvs[j].move, cp: pvToCp(pvs[j]) });
+    }
+    if (!cand.length) return null;
+    var best = cand.reduce(function (a, b) { return b.cp > a.cp ? b : a; });
+    var ok = cand.filter(function (c) { return c.cp >= best.cp - ANAND_MARGIN; });
+    if (!ok.length) return null;
+    return ok.reduce(function (a, b) {
+      return (pOf[b.uci] || 0) > (pOf[a.uci] || 0) ? b : a;
+    }).uci;
+  }, function () { return null; });
+}
+
+
 // ---------- The engine's veto ----------
 // A policy net plays without looking at the position its move creates, so it
 // cannot see that the piece it just moved is now hanging.
@@ -424,4 +472,21 @@ function screenMove(fen, moves, sampled, spec) {
       return tiltWeight(b, mean, spec) > tiltWeight(a, mean, spec) ? b : a;
     }).uci;
   }, function () { return sampled; });
+}
+
+
+// ---------- One way in ----------
+// The app and the calibrator must choose moves through the same door, or the
+// strength we measure stops being the strength that ships. They drifted once
+// already: a rename left both pages calling a function that no longer existed.
+// Resolves to a uci string, always.
+function decideMove(fen, moves, o) {
+  if (o && o.engineFirst) {
+    return anandPick(fen, moves).then(function (uci) {
+      if (uci) return uci;
+      // the engine could not answer — his net alone, screened as before
+      return screenMove(fen, moves, chooseBotMove(fen, moves, o), screenFor(o));
+    });
+  }
+  return screenMove(fen, moves, chooseBotMove(fen, moves, o), screenFor(o));
 }

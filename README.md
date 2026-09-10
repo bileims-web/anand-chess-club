@@ -45,10 +45,22 @@ That combination is why one aggression knob gives two different opponents. At
 that is what 900 means. At 1900 the same taste survives a 50cp leash, so only
 the sound attacks get through.
 
-Anand keeps his own screen (depth 10, 90cp) and, unlike a rung, takes the move
-*he* ranked highest among the survivors rather than the one that was sampled.
-His `aggression` is 0 for that reason: a tilt on a move he then overrides would
-be theatre. His personality is in his lines.
+Anand is the exception to all three steps, because for him the order is
+reversed. His net is 1.7MB and searches nothing, so asked for a move on its own
+it plays club chess with a 2700 on the card, and no amount of screening fixes
+that — a veto removes blunders, it does not find plans. So **Stockfish
+proposes and his net picks**: the engine returns six moves at `UCI_Elo 2700`,
+everything within 60cp of its best goes to his net, and he plays the one *he*
+ranks highest. The engine sets the standard, the net keeps the style.
+
+Read the card carefully. His *candidates* are 2700; the pick among them is his
+own, so his real strength sits a little under the number. That is what the
+60cp margin costs, and why it is tight. If the engine cannot answer he falls
+back to his net alone, screened as before — nothing may stop him moving.
+
+`decideMove` in `bot.js` is the only way either page chooses a move. Keep it
+that way: the app and the calibrator drifted apart once already, when a rename
+left both calling a function that no longer existed.
 
 ## Personalities
 
