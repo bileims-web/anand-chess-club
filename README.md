@@ -65,11 +65,16 @@ left both calling a function that no longer existed.
 ## Personalities
 
 The ten rungs are club members, not difficulty settings: a name, an
-`aggression`, and `lines` they say on their own moves — a greeting, a capture,
-a check, a gloat when their own win estimate passes 72%, a mutter when it drops
-under 28%, and a parting line on the game card. One line every seven seconds at
-most; a line every move is a chat bot you want to mute. All of it lives in
-`LEVELS` in `bot.js`, so a new voice is a data edit.
+`aggression` that shapes how they play, and `lines` that give them a voice.
+All of it lives in `LEVELS` in `bot.js`, so a new voice is a data edit.
+
+**Nothing is ever printed above the board.** A speech bubble there was tried
+and removed: it sat in normal flow, so every line it showed and hid pushed the
+board down and pulled it back, and the board must not move while you are
+looking at it. Only the `won`/`lost` lines are used now, on the game card at
+the end, where there is nothing to disturb. The other pools are kept for a
+surface that can hold them without moving anything — an overlay pinned clear
+of the board, or the opponent's name row.
 
 ## Ratings
 
