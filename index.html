@@ -410,6 +410,20 @@
     border: 1px solid color-mix(in srgb, var(--brass) 30%, transparent);
     background: color-mix(in srgb, var(--brass) 7%, transparent);
   }
+  /* The opponent has opinions. Brief, and never over the board. */
+  #oppSay {
+    margin: 6px 16px 0; padding: 6px 11px; border-radius: 10px;
+    font-size: 13px; text-align: center; font-style: italic;
+    color: color-mix(in srgb, var(--pw) 80%, transparent);
+    border: 1px solid color-mix(in srgb, var(--pw) 13%, transparent);
+    background: color-mix(in srgb, var(--pw) 6%, transparent);
+    animation: sayIn 150ms ease-out;
+  }
+  @keyframes sayIn {
+    from { opacity: 0; transform: translateY(-3px); }
+    to { opacity: 1; transform: none; }
+  }
+  @media (prefers-reduced-motion: reduce) { #oppSay { animation: none; } }
   #rvPlyTxt { font-size: 12px; min-width: 62px; text-align: left;
     color: color-mix(in srgb, var(--pw) 45%, transparent); font-variant-numeric: tabular-nums; }
   #histList { max-width: 520px; margin: 0 auto; padding: 8px 16px 32px; }
@@ -457,6 +471,7 @@
     <button class="gear" id="gearGame" aria-label="Settings">&#9881;</button>
   </div>
   <div id="varBanner" class="hidden"></div>
+  <div id="oppSay" class="hidden"></div>
   <div id="board">
     <div id="squares"></div>
     <div id="marks"></div>
@@ -698,7 +713,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-09-10.1';
+var BUILD = '2026-09-10.2';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -808,7 +823,9 @@ var stateLoaded = false;
 //   2 — tail cut at top-p 0.92 / T=0.7, Anand screened by Stockfish
 //   3 — the screen becomes the ladder: every rung above 1000 gets its own
 //       Stockfish veto, and the leash shortens as you climb
-var LADDER_EPOCH = 3;
+//   4 — the ten rungs re-cast as members who attack: each one tilts the
+//       policy toward the sharp move before sampling it
+var LADDER_EPOCH = 4;
 
 var relocked = false;   // set by loadState when the epoch moved on
 
@@ -1114,8 +1131,8 @@ function aiMove() {
     if (over || seq !== aiMoveSeq || game.turn() !== oppColor || !r.moves.length) return;
     // his own read of the position, from his side (value is White's chance)
     oppWinPct = oppColor === 'w' ? r.value * 100 : 100 - r.value * 100;
-    var uci = chooseMaiaMove(r.moves, opp.offLadder ? ANAND_TEMPERATURE : MAIA_TEMPERATURE);
     var fen = game.fen();
+    var uci = chooseBotMove(fen, r.moves, opp);
     // screenFor decides how tight this opponent's veto is; the bottom rungs
     // get none, and screenMove hands the sampled move straight back.
     var pick = screenMove(fen, r.moves, uci, screenFor(opp));
@@ -1133,6 +1150,7 @@ function aiMove() {
         });
         if (!mv) mv = game.move(game.moves()[0]);  // should never happen
         animateMove(mv);
+        oppSpeak(mv);
         afterMove(mv);
       }, delay);
     });
@@ -2809,6 +2827,47 @@ function showVariationCard(title, msg) {
 // ---------- Resign, draw offers, and his resignation ----------
 // He judges the position with his own net's value head — the number he
 // already produces on every move, so nothing extra is computed.
+// ---------- What they say ----------
+// A member speaks on their own move, and only about that move. The gap is the
+// whole design: a line every few moves is a personality, one every move is a
+// chat bot you want to mute.
+var SAY_GAP = 7000;     // ms between lines
+var SAY_SHOWN = 3800;   // ms a line stays up
+var GLOAT_AT = 72, RATTLED_AT = 28;   // their own read of their chances
+var sayTimer = null, sayLast = 0;
+
+function hideSay() {
+  if (sayTimer) { clearTimeout(sayTimer); sayTimer = null; }
+  var el = $('oppSay');
+  el.textContent = '';
+  el.classList.add('hidden');
+}
+
+function say(kind, force) {
+  var line = botLine(opp, kind);
+  if (!line) return;
+  var now = Date.now();
+  if (!force && now - sayLast < SAY_GAP) return;
+  sayLast = now;
+  if (sayTimer) clearTimeout(sayTimer);
+  var el = $('oppSay');
+  el.textContent = line;
+  el.classList.remove('hidden');
+  sayTimer = setTimeout(hideSay, SAY_SHOWN);
+}
+
+// One line per move at most, and the sharpest thing that just happened wins.
+function oppSpeak(mv) {
+  if (over || variation) return;
+  if (game.in_checkmate()) return;                 // the card says it better
+  if (game.in_draw() || game.in_stalemate()) return;   // and so does the draw
+  if (game.in_check()) return say('check');
+  if (mv.captured && PIECE_VAL[mv.captured] >= 3) return say('capture');
+  if (oppWinPct >= GLOAT_AT) return say('gloat');
+  if (oppWinPct <= RATTLED_AT) return say('rattled');
+  if (mv.captured) return say('capture');
+}
+
 var RESIGN_AT = 8;      // his win chance, in percent
 var RESIGN_STREAK = 2;  // consecutive moves before he gives up
 var OFFER_MIN_PLIES = 16;
@@ -2930,6 +2989,13 @@ function startGame(o, idx, resume) {
   $('card').classList.add('hidden');
   $('offer').classList.add('hidden');
   $('startDlg').classList.add('hidden');
+  hideSay();
+  sayLast = 0;
+  // A greeting belongs to a new game; on resume you have already met. It
+  // arrives with the board, and only if you are both still sitting there.
+  if (!resume) setTimeout(function () {
+    if (opp === o && !$('gameScr').classList.contains('hidden')) say('hello', true);
+  }, 600);
   rebuildPieces();
   setMarks();
   clearHints();
@@ -3086,6 +3152,10 @@ function endGame(reason) {
     msg = 'The game against ' + opp.name + ' ended in a draw.';
   }
 
+  hideSay();
+  var parting = botLine(opp, result === 'win' ? 'lost' : result === 'loss' ? 'won' : '');
+  if (parting) msg += ' ' + opp.name + ': \u201c' + parting + '\u201d';
+
   clearSavedGame();
   renderSaveButtons();
   showGameCard(title, msg);
@@ -3096,6 +3166,7 @@ function endGame(reason) {
 function toLadder() {
   variation = null;
   $('varBanner').classList.add('hidden');
+  hideSay();
   if (aiTimer) { clearTimeout(aiTimer); aiTimer = null; }
   aiMoveSeq++;
   $('gameScr').classList.add('hidden');

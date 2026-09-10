@@ -156,7 +156,7 @@ function playGame(bot, engine, anchorElo, botIsWhite, openingPlies, movetime, ma
     // opponent is — the same thing the app now does with your live rating.
     return engine.evaluate(fen, bot.rating, anchorElo).then(function (r) {
       if (!r.moves || !r.moves.length) return false;
-      var uci = chooseMaiaMove(r.moves, bot.offLadder ? ANAND_TEMPERATURE : MAIA_TEMPERATURE);
+      var uci = chooseBotMove(fen, r.moves, bot);
       var pick = screenMove(fen, r.moves, uci, screenFor(bot));
       return pick.then(function (chosen) { return apply(chosen); });
     }, function () { return false; });
