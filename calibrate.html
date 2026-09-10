@@ -123,7 +123,7 @@ function log(line) {
 
 // ---------- one game ----------
 // The bot picks exactly as it does in the app: same policy, same temperature,
-// same nucleus, same blunder filter. Stockfish replies at a fixed UCI_Elo.
+// same nucleus, same screen. Stockfish replies at a fixed UCI_Elo.
 // Returns the bot's score: 1, 0.5 or 0.
 function playGame(bot, engine, anchorElo, botIsWhite, openingPlies, movetime, maxPly) {
   var g = new Chess();
@@ -157,7 +157,7 @@ function playGame(bot, engine, anchorElo, botIsWhite, openingPlies, movetime, ma
     return engine.evaluate(fen, bot.rating, anchorElo).then(function (r) {
       if (!r.moves || !r.moves.length) return false;
       var uci = chooseMaiaMove(r.moves, bot.offLadder ? ANAND_TEMPERATURE : MAIA_TEMPERATURE);
-      var pick = bot.offLadder ? anandFilter(fen, r.moves, uci) : Promise.resolve(uci);
+      var pick = screenMove(fen, r.moves, uci, screenFor(bot));
       return pick.then(function (chosen) { return apply(chosen); });
     }, function () { return false; });
   }

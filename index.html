@@ -806,7 +806,9 @@ var stateLoaded = false;
 // longer exist. Beating them again means something different now.
 //   1 — original: ladder sampled at T=1, Anand unfiltered
 //   2 — tail cut at top-p 0.92 / T=0.7, Anand screened by Stockfish
-var LADDER_EPOCH = 2;
+//   3 — the screen becomes the ladder: every rung above 1000 gets its own
+//       Stockfish veto, and the leash shortens as you climb
+var LADDER_EPOCH = 3;
 
 var relocked = false;   // set by loadState when the epoch moved on
 
@@ -1114,7 +1116,9 @@ function aiMove() {
     oppWinPct = oppColor === 'w' ? r.value * 100 : 100 - r.value * 100;
     var uci = chooseMaiaMove(r.moves, opp.offLadder ? ANAND_TEMPERATURE : MAIA_TEMPERATURE);
     var fen = game.fen();
-    var pick = opp.offLadder ? anandFilter(fen, r.moves, uci) : Promise.resolve(uci);
+    // screenFor decides how tight this opponent's veto is; the bottom rungs
+    // get none, and screenMove hands the sampled move straight back.
+    var pick = screenMove(fen, r.moves, uci, screenFor(opp));
     return pick.then(function (chosen) {
       uci = chosen;
       if (over || seq !== aiMoveSeq || game.turn() !== oppColor) return;
@@ -2895,10 +2899,10 @@ function startGame(o, idx, resume) {
   oppColor = playerColor === 'w' ? 'b' : 'w';
   resignOffered = false; oppLostStreak = 0; oppWinPct = 50;
   coachedFens = {};
-  // Anand screens his own moves through Stockfish, so it sits on the critical
-  // path for his very first reply now. Start it loading with the board rather
-  // than making you wait on 7MB of wasm mid-move.
-  if (o.offLadder) SF.init().catch(function () {});
+  // An opponent with a screen puts Stockfish on the critical path for its very
+  // first reply. Start it loading with the board rather than making you wait on
+  // 7MB of wasm mid-move. The bottom rungs have no screen and skip it.
+  if (screenFor(o)) SF.init().catch(function () {});
   if (resume) {
     // replay the saved moves; anything illegal means a stale record
     for (var ri = 0; ri < resume.sans.length; ri++) {

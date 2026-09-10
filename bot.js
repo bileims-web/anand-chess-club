@@ -100,28 +100,72 @@ function chooseMaiaMove(moves, temperature) {
 }
 
 
-// ---------- Anand's blunder filter ----------
+// ---------- The engine's veto ----------
 // A policy net plays without looking at the position its move creates, so it
-// cannot see that the piece it just moved is now hanging. That is fine for the
-// ladder — a 1200 hangs pieces, that is what 1200 means — but it is what kept
-// Anand short of the number on his card.
+// cannot see that the piece it just moved is now hanging.
 //
-// So: take his top few policy moves, let the Stockfish already in the page
-// look at each resulting position, and play the move HE liked most among those
-// that don't drop material. Style survives (the ranking is still his), the
-// gifts don't. A shallow depth is enough — hung pieces are a 2-ply problem.
-var ANAND_FILTER_TOPK = 4;     // candidates screened, in policy order
-var ANAND_FILTER_DEPTH = 10;   // plenty to see a piece hanging
-var ANAND_FILTER_MARGIN = 90;  // cp worse than the best candidate, still played
-var ANAND_FILTER_FLOOR = 0.02; // ignore candidates below 2% policy
+// Left alone that caps the whole ladder. Measured by self-play, top move
+// against top move, elo_self 1900 beats elo_self 700 by only 14/16 — about
+// 340 Elo, against the 1200 points the cards claim. Maia 3 conditions on
+// rating by interpolating two embedding vectors across a 0-5000 clip, so the
+// whole ladder sits on 24% of that line. The knob cannot stretch further.
+//
+// So Stockfish holds a veto, and how tight the veto is IS the ladder. The net
+// still chooses; the engine only refuses. The bottom rungs get no veto at all,
+// because a 900 hangs pieces and that is what 900 means. The leash shortens as
+// you climb.
+//
+// Depth, not movetime: a rung has to be worth the same on a slow phone as on a
+// fast laptop. The time may vary, the strength may not.
+var SCREENS = [
+  { upTo: 1000,     spec: null },
+  { upTo: 1300,     spec: { topK: 3, depth: 6,  margin: 250, floor: 0.02 } },
+  { upTo: 1600,     spec: { topK: 4, depth: 8,  margin: 120, floor: 0.02 } },
+  { upTo: Infinity, spec: { topK: 5, depth: 10, margin: 50,  floor: 0.01 } }
+];
 
-// Resolves to a uci string: the filtered pick, or `fallback` if anything at
-// all goes wrong. This must never be able to stop him moving.
-function anandFilter(fen, moves, fallback) {
+// Anand keeps the screen he shipped with, and keeps taking the move HE liked
+// most among the survivors — he is a boss, not a rung, and his best is the
+// point of him.
+var ANAND_SCREEN = { topK: 4, depth: 10, margin: 90, floor: 0.02, preferSampled: false };
+
+function screenFor(o) {
+  if (!o) return null;
+  if (o.offLadder) return ANAND_SCREEN;
+  for (var i = 0; i < SCREENS.length; i++) {
+    if (o.rating <= SCREENS[i].upTo) {
+      var s = SCREENS[i].spec;
+      if (!s) return null;
+      // A rung is the same opponent every game, so it has to keep its variety:
+      // the move it actually sampled stands whenever the engine can live with it.
+      return { topK: s.topK, depth: s.depth, margin: s.margin, floor: s.floor,
+               preferSampled: true };
+    }
+  }
+  return null;
+}
+
+// Resolves to a uci string: the screened pick, or `sampled` if there is no
+// screen at this level or anything at all goes wrong. This must never be able
+// to stop an opponent moving.
+function screenMove(fen, moves, sampled, spec) {
+  if (!spec) return Promise.resolve(sampled);
+
   var cands = moves.filter(function (m, i) {
-    return i === 0 || m[1] >= ANAND_FILTER_FLOOR;
-  }).slice(0, ANAND_FILTER_TOPK);
-  if (cands.length < 2) return Promise.resolve(fallback);
+    return i === 0 || m[1] >= spec.floor;
+  }).slice(0, spec.topK);
+
+  // The sampled move has to be judged too. Screening only the top of the
+  // policy would quietly replace it every time it fell outside topK, and the
+  // rung would play the same handful of moves for ever.
+  var have = false;
+  for (var c = 0; c < cands.length; c++) if (cands[c][0] === sampled) { have = true; break; }
+  if (!have) {
+    for (var k = 0; k < moves.length; k++) {
+      if (moves[k][0] === sampled) { cands = cands.concat([moves[k]]); break; }
+    }
+  }
+  if (cands.length < 2) return Promise.resolve(sampled);
 
   var scored = [];
   var chain = SF.init();
@@ -138,21 +182,29 @@ function anandFilter(fen, moves, fallback) {
       if (g.in_checkmate()) { scored.push({ uci: m[0], cp: 100000, p: m[1] }); return; }
       if (g.in_draw() || g.in_stalemate()) { scored.push({ uci: m[0], cp: 0, p: m[1] }); return; }
       return SF.analyse(g.fen(), {
-        depth: ANAND_FILTER_DEPTH, multipv: 1, timeout: 6000
+        depth: spec.depth, multipv: 1, timeout: 6000,
+        // One Stockfish serves the whole page, and setoption is sticky. The
+        // calibrator's anchor plays at a limited UCI_Elo, so a veto that said
+        // nothing here would quietly inherit it and screen at 1200.
+        options: { 'UCI_LimitStrength': 'false' }
       }).then(function (res) {
-        // pvs scores are from the side to move — which, after his move, is
-        // the player. Negate to get the position from Anand's side.
+        // pvs scores are from the side to move — which, after this move, is
+        // the player. Negate to get the position from the opponent's side.
         scored.push({ uci: m[0], cp: -pvToCp(res.pvs[0]), p: m[1] });
       }, function () {});   // one failed probe just drops that candidate
     });
   });
 
   return chain.then(function () {
-    if (!scored.length) return fallback;
+    if (!scored.length) return sampled;
     var best = scored.reduce(function (a, b) { return b.cp > a.cp ? b : a; });
-    // Among the survivors, his own top-ranked move wins — the engine only
-    // gets a veto, never the casting vote.
-    var ok = scored.filter(function (s) { return s.cp >= best.cp - ANAND_FILTER_MARGIN; });
+    var ok = scored.filter(function (s) { return s.cp >= best.cp - spec.margin; });
+    if (!ok.length) return sampled;
+    // The net's own choice stands unless it was a gift.
+    if (spec.preferSampled) {
+      for (var i = 0; i < ok.length; i++) if (ok[i].uci === sampled) return sampled;
+    }
+    // Otherwise the highest-ranked survivor: the engine refuses, never picks.
     return ok.reduce(function (a, b) { return b.p > a.p ? b : a; }).uci;
-  }, function () { return fallback; });
+  }, function () { return sampled; });
 }
