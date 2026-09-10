@@ -83,6 +83,38 @@ run a gauntlet, and paste the result into `MEASURED` in `bot.js`. A measured
 rating replaces what is displayed and feeds the Elo maths — never `elo_self`,
 which is the knob we ask Maia to play at.
 
+**Every card is currently an unverified label.** `MEASURED` is empty, and the
+aggression tilt moved each member's strength when it landed, so the roster may
+no longer sit in rating order — The Ringer at 0.55 is far milder than The
+Sacker at 0.95 three rungs below it. That pair is the first thing to check.
+
+### Running the gauntlet
+
+Open `calibrate.html` on a laptop and leave the tab open; it is not linked from
+the app. The defaults are 10 games against each of four Stockfish anchors
+(1320/1600/1900/2200), which is 40 games per bot and 440 for the whole roster —
+start with one or two members rather than "Everyone".
+
+**Skip Anand.** Since the engine now proposes his moves at `UCI_Elo 2700` and
+the anchors stop at 2200, he sweeps every anchor, the fit reports `—`, and the
+run is wasted time. His candidates are anchored by construction; that is the
+whole point of the change.
+
+The Results panel emits a paste-ready `var MEASURED = {…}` block. Paste it over
+the one in `bot.js`.
+
+### Why not on the server
+
+Do not run this on the trading host. It is a 1.9GB box that runs six live
+trading services, and a full gauntlet is hours of Stockfish search plus a
+forward pass of a 46MB net on every ply. Use a laptop's browser, which is what
+the page is for.
+
+A headless version is possible if this ever needs to be re-run often — the
+Stockfish build loads under node with a Web Worker shim, and `onnxruntime-node`
+can serve the nets — but it should be scheduled outside market hours, through
+`scripts/research.sh` in the trading repo.
+
 ## Relocking the ladder
 
 `LADDER_EPOCH` in `index.html` is the version of "how the opponents play".
