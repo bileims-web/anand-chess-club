@@ -303,7 +303,7 @@ function chooseBotMove(fen, moves, o) {
 var ANAND_ELO = 2700;
 var ANAND_MULTIPV = 6;
 var ANAND_DEPTH = 12;
-var ANAND_MARGIN = 60;    // cp behind the engine's best, still his to choose
+var ANAND_MARGIN = 40;    // cp behind the engine's best, still his to choose
 
 // Resolves to a uci string, or null if the engine could not answer — the
 // caller then falls back to his net alone. Nothing may stop him moving.
