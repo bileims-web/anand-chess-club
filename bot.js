@@ -133,6 +133,68 @@ var MEAN_GIRL = { name: 'Anand', rating: 2700, offLadder: true, avatarKind: 'dis
     won:     ['Good game. Really.'],
     lost:    ["You beat me. That's rare — well done."] } };
 
+// The Old School Master plays the way the club WISHES it played: every line
+// opened, every piece thrown at the king, soundness a matter for the
+// post-mortem. Same machinery as Anand — the engine proposes, a net picks —
+// but with the dials set the other way: a wide field (eight lines, anything
+// within 150cp of best survives), a small budget so the engine cannot see
+// far enough to disapprove, an aggression tilt over the survivors past the
+// ladder's full scale (1.6: at 1.0 the net's own ranking still out-voted a
+// sacrifice it gave 4%), the net's ranking at T=1 so the tilt gets its say,
+// the pick SAMPLED from the tilted weights rather than taken, so the same
+// opening does not produce the same game, and — the part that makes him old
+// school rather than merely greedy — a `sacrifice` bonus per pawn of material
+// a move puts on offer (materialOffered), because the aggression score alone
+// rewards taking, and his first measured game was a queen grabbing b7 and
+// getting mated for it.
+//
+// A sacrifice must have a plan behind it, and 4000 nodes over eight lines
+// cannot see one. But "sound" here means sound AGAINST THE OPPONENT HE
+// FACES, not against a 3000-rated engine: a sacrifice that a grandmaster
+// refutes and a 2000 does not is exactly the old school's stock in trade,
+// and what makes it so is that the defence takes accuracy — one exact reply,
+// where the natural ones lose. So whatever he picks is VERIFIED in two
+// stages (verifyPick). First the engine, on `verifyNodes`, looks at the
+// opponent's best `defences` replies and counts how many leave him more
+// than `verifyMargin` behind its own best from before his move. None: the
+// move is simply sound and stands. Two or more: the defence is easy, and
+// the move is dropped. Exactly one — an only-move defence — goes to the
+// second stage: Stockfish plays the reply at UCI_Elo equal to his own
+// rating (the Elo limiter does apply to bestmove, which is what this reads),
+// `refuterTries` times since that pick is noisy, and the move stands if his
+// equal misses the refutation more often than not. A dropped move sends him
+// back to pick again from what is left, and if none of his choices survive
+// he plays the engine's move. The shallow margin is how wide his imagination
+// runs; the verify margin is how much an accurate defence may take back.
+// Rated 2000 on the card until the gauntlet says otherwise; below Anand, off
+// the ladder, never locked.
+var OLD_SCHOOL = { name: 'Old School Master', rating: 2000, offLadder: true,
+  avatarKind: 'initials', aggression: 1.6, sacrifice: 0.6, temp: 1.0, engineFirst: true,
+  proposal: { nodes: 4000, margin: 150, multipv: 8,
+              verifyNodes: 20000, verifyMargin: 100, defences: 4,
+              refuterMs: 60, refuterTries: 3 },
+  lines: {
+    hello:   ["Material is for the endgame. We shan't reach one.", 'Castle quickly. I am coming either way.'],
+    capture: ['Take it. It was in the way.', 'A piece for the initiative. The old exchange rate.'],
+    check:   ['The king walks. They always walk.', 'Check. And again, if you like.'],
+    gloat:   ['Morphy would have played it faster.', 'Open lines, open king. The rest is bookkeeping.'],
+    rattled: ['You declined? Nobody declines.', 'Hm. The romantics never planned for that.'],
+    won:     ['Beauty before correctness. Mostly beauty.'],
+    lost:    ['Unsound. Gloriously unsound. Again.'] } };
+
+// Off the ladder, in display order. The app addresses them by negative index
+// (-1 is Anand, -2 the Master) so a saved game or a past-games row can find
+// its opponent again.
+var BOSSES = [MEAN_GIRL, OLD_SCHOOL];
+function bossAt(idx) { return idx < 0 ? BOSSES[-idx - 1] || null : null; }
+
+// How sharply a member follows its net: the ladder is human-shaped, Anand is
+// crushed to his top move, and a boss may say otherwise for itself.
+function botTemp(o) {
+  if (o && typeof o.temp === 'number') return o.temp;
+  return (o && o.offLadder) ? ANAND_TEMPERATURE : MAIA_TEMPERATURE;
+}
+
 // A random line, or '' if this opponent has nothing to say about it.
 function botLine(o, kind) {
   var pool = o && o.lines && o.lines[kind];
@@ -173,12 +235,13 @@ var MAIA_TOP_P = 0.92;        // nucleus: drop the bottom 8% of policy mass
 var MEASURED = {
   // 'The Champion': 1642,
   'Anand': 2746,   // 2026-09-14, ANAND_NODES 8000, 16 games/anchor vs 2200-3100
+  'Old School Master': 2176,   // 2026-09-14, 4000 nodes / 150cp / verified, 16 games/anchor vs 1320-2200
 };
 
 function ratingFor(o) { return (o && o.measured) || (o && o.rating) || 0; }
 
 function applyMeasured() {
-  LEVELS.concat([MEAN_GIRL]).forEach(function (o) {
+  LEVELS.concat(BOSSES).forEach(function (o) {
     if (typeof MEASURED[o.name] === 'number') o.measured = MEASURED[o.name];
   });
 }
@@ -250,9 +313,28 @@ function aggressionScore(g, mv, mover) {
   return s;
 }
 
+// Material a move puts on offer: what the mover stands to lose if the piece
+// it just moved is taken by the cheapest attacker and we recapture with what
+// we have. Zero for a safe move; the value given away for a sacrifice. This
+// is the romantic's yardstick — the aggression score above rewards TAKING
+// material, and an old-school attack is about giving it. `g` is the position
+// after the move, opponent to move.
+function materialOffered(g, mv) {
+  var moverVal = PIECE_VAL[mv.piece] || 0;
+  if (!moverVal) return 0;
+  var took = mv.captured ? PIECE_VAL[mv.captured] : 0;
+  var replies = g.moves({ verbose: true }).filter(function (r) { return r.to === mv.to && r.captured; });
+  if (!replies.length) return 0;
+  var cheapest = replies.reduce(function (a, b) { return PIECE_VAL[b.piece] < PIECE_VAL[a.piece] ? b : a; });
+  var g2 = new Chess(g.fen());
+  g2.move(cheapest);
+  var recapture = g2.moves({ verbose: true }).some(function (r) { return r.to === mv.to && r.captured; });
+  return Math.max(0, moverVal - (recapture ? PIECE_VAL[cheapest.piece] : 0) - took);
+}
+
 // The move an opponent samples: policy, tail cut, then their own taste.
 function chooseBotMove(fen, moves, o) {
-  var temperature = (o && o.offLadder) ? ANAND_TEMPERATURE : MAIA_TEMPERATURE;
+  var temperature = botTemp(o);
   if (temperature <= 0) return moves[0][0];
   var pool = nucleusOf(moves);
   var aggression = (o && o.aggression) || 0;
@@ -318,15 +400,27 @@ var ANAND_NODES = 8000;   // MultiPV-6 search budget; calibrate, don't guess
 var ANAND_MULTIPV = 6;
 var ANAND_MARGIN = 40;    // cp behind the engine's best, still his to choose
 
+// Anand's numbers are the default; another engine-first member brings its own.
+function proposalFor(o) {
+  return (o && o.proposal) ||
+         { nodes: ANAND_NODES, margin: ANAND_MARGIN, multipv: ANAND_MULTIPV };
+}
+
 // Resolves to a uci string, or null if the engine could not answer — the
-// caller then falls back to his net alone. Nothing may stop him moving.
-function anandPick(fen, moves) {
+// caller then falls back to the net alone. Nothing may stop him moving.
+// The pick among the survivors is the member's taste: policy at the member's
+// temperature, tilted by its aggression — the same expression the veto's
+// fallback uses (tiltWeight). With no aggression that is the policy ranking,
+// which is what Anand has always taken.
+function anandPick(fen, moves, o) {
+  var spec = proposalFor(o);
+  var taste = { aggression: (o && o.aggression) || 0, temp: botTemp(o) };
   var pOf = {};
   for (var i = 0; i < moves.length; i++) pOf[moves[i][0]] = moves[i][1];
 
   return SF.init().then(function () {
     return SF.analyse(fen, {
-      nodes: ANAND_NODES, multipv: ANAND_MULTIPV, timeout: 15000,
+      nodes: spec.nodes, multipv: spec.multipv, timeout: 15000,
       // Explicit: the calibrator's anchor sets it true on this same engine and
       // setoption persists, so a proposal must never inherit a weakened pick.
       options: { 'UCI_LimitStrength': 'false' }
@@ -349,12 +443,125 @@ function anandPick(fen, moves) {
     }
     if (!cand.length) return null;
     var best = cand.reduce(function (a, b) { return b.cp > a.cp ? b : a; });
-    var ok = cand.filter(function (c) { return c.cp >= best.cp - ANAND_MARGIN; });
+    var ok = cand.filter(function (c) { return c.cp >= best.cp - spec.margin; });
     if (!ok.length) return null;
-    return ok.reduce(function (a, b) {
-      return (pOf[b.uci] || 0) > (pOf[a.uci] || 0) ? b : a;
-    }).uci;
+    if (ok.length === 1 || !taste.aggression) {
+      return ok.reduce(function (a, b) {
+        return (pOf[b.uci] || 0) > (pOf[a.uci] || 0) ? b : a;
+      }).uci;
+    }
+    // Score the survivors for sharpness and let the member's taste rank them.
+    var g0;
+    try { g0 = new Chess(fen); } catch (e) { g0 = null; }
+    if (!g0) return ok[0].uci;
+    var mover = g0.turn(), scored = [], sum = 0;
+    for (var k = 0; k < ok.length; k++) {
+      var g = new Chess(fen), u = ok[k].uci;
+      var mv = g.move({ from: u.slice(0, 2), to: u.slice(2, 4),
+                        promotion: u.length > 4 ? u.slice(4) : undefined });
+      if (!mv) continue;
+      if (g.in_checkmate()) return u;           // nobody in this club declines mate
+      var ag = aggressionScore(g, mv, mover);
+      if (o && o.sacrifice) ag += o.sacrifice * materialOffered(g, mv);
+      scored.push({ uci: u, p: pOf[u] || 0, ag: ag }); sum += ag;
+    }
+    if (!scored.length) return ok[0].uci;
+    var mean = sum / scored.length;
+    // Sampled, not taken: a member with taste should not replay the same
+    // game every time the opening repeats.
+    var pick = function (pool) {
+      return sampleWeighted(
+        pool.map(function (s) { return [s.uci, s.p]; }),
+        pool.map(function (s) { return tiltWeight(s, mean, taste); }));
+    };
+    if (!spec.verifyNodes) return pick(scored);
+    return verifyPick(fen, scored, pick, spec, ratingFor(o));
   }, function () { return null; });
+}
+
+// The practical test. Resolves to a uci string: the first sampled pick whose
+// defence is either unnecessary, or an only-move that an equal-rated
+// opponent tends to miss (see OLD_SCHOOL); failing that, the engine's best.
+// `rating` is the strength the refuter plays at.
+function applyUci(g, u) {
+  return g.move({ from: u.slice(0, 2), to: u.slice(2, 4),
+                  promotion: u.length > 4 ? u.slice(4) : undefined });
+}
+
+function verifyPick(fen, pool, pick, spec, rating) {
+  var deep = { nodes: spec.verifyNodes, multipv: 1, timeout: 15000,
+               options: { 'UCI_LimitStrength': 'false' } };
+  var refuter = { movetime: spec.refuterMs || 60, multipv: 1, timeout: 15000,
+                  options: { 'UCI_LimitStrength': 'true', 'UCI_Elo': String(rating) } };
+  var tries = spec.refuterTries || 3;
+  var need = Math.floor(tries / 2) + 1;    // a majority of the replies must fail to refute
+
+  return SF.analyse(fen, deep).then(function (root) {
+    var bestMove = root && root.pvs && root.pvs[0] && root.pvs[0].move;
+    var bestCp = root && root.pvs && root.pvs[0] ? pvToCp(root.pvs[0]) : null;
+    if (bestCp === null) return pick(pool);
+
+    // Does `u` hold against one equal-rated reply? Resolves true/false.
+    function holdsOnce(child) {
+      return SF.analyse(child, refuter).then(function (rep) {
+        var g = new Chess(child);
+        if (!rep || !rep.bestmove || rep.bestmove === '(none)' || !applyUci(g, rep.bestmove)) {
+          return true;                    // no reply at all: nothing to refute with
+        }
+        if (g.in_checkmate()) return false;   // his equal just mated him
+        return SF.analyse(g.fen(), deep).then(function (res) {
+          // his move again: the score is already from his side
+          var cp = res && res.pvs && res.pvs[0] ? pvToCp(res.pvs[0]) : null;
+          return cp === null || cp >= bestCp - spec.verifyMargin;
+        });
+      });
+    }
+
+    function holds(child) {
+      var yes = 0, no = 0;
+      function next() {
+        if (yes >= need) return Promise.resolve(true);
+        if (no > tries - need) return Promise.resolve(false);
+        return holdsOnce(child).then(function (ok) { if (ok) yes++; else no++; return next(); });
+      }
+      return next();
+    }
+
+    // Stage one: how many of the opponent's best replies refute `u`?
+    // Reply scores are the opponent's, negated back to his side.
+    function refutations(child) {
+      var wide = { nodes: spec.verifyNodes, multipv: spec.defences || 4, timeout: 15000,
+                   options: { 'UCI_LimitStrength': 'false' } };
+      return SF.analyse(child, wide).then(function (res) {
+        var pvs = (res && res.pvs) || [], n = 0;
+        for (var i = 0; i < pvs.length; i++) {
+          if (pvs[i] && -pvToCp(pvs[i]) < bestCp - spec.verifyMargin) n++;
+        }
+        return n;
+      });
+    }
+
+    var left = pool.slice();
+    function attempt(n) {
+      if (!left.length || n <= 0) return Promise.resolve(bestMove || pick(pool));
+      var u = pick(left);
+      if (u === bestMove) return Promise.resolve(u);   // the engine's own choice needs no check
+      var g = new Chess(fen);
+      if (!applyUci(g, u)) return Promise.resolve(bestMove || pick(pool));
+      if (g.in_checkmate()) return Promise.resolve(u);
+      var child = g.fen();
+      return refutations(child).then(function (count) {
+        if (count === 0) return true;            // sound outright
+        if (count > 1) return false;             // easy to defend: no plan there
+        return holds(child);                     // only-move defence: would his equal find it?
+      }).then(function (ok) {
+        if (ok) return u;
+        left = left.filter(function (s) { return s.uci !== u; });
+        return attempt(n - 1);
+      }, function () { return u; });   // a failed probe lets the pick stand
+    }
+    return attempt(3);
+  }, function () { return pick(pool); });
 }
 
 
@@ -382,11 +589,15 @@ var SCREENS = [
   { upTo: Infinity, spec: { topK: 5, depth: 10, margin: 50,  floor: 0.01 } }
 ];
 
-// Anand keeps the screen he shipped with, and keeps taking the move HE liked
-// most among the survivors — he is a boss, not a rung, and his best is the
-// point of him.
-var ANAND_SCREEN = { topK: 4, depth: 10, margin: 90, floor: 0.02,
-                     aggression: 0, temp: ANAND_TEMPERATURE, preferSampled: false };
+// A boss only reaches the screen when the engine could not propose. Anand
+// keeps the screen he shipped with and takes the move HE liked most among the
+// survivors; another boss brings its own taste to the same screen.
+var BOSS_SCREEN = { topK: 4, depth: 10, margin: 90, floor: 0.02 };
+function bossScreen(o) {
+  return { topK: BOSS_SCREEN.topK, depth: BOSS_SCREEN.depth, margin: BOSS_SCREEN.margin,
+           floor: BOSS_SCREEN.floor, aggression: (o && o.aggression) || 0,
+           temp: botTemp(o), preferSampled: false };
+}
 
 // Keyed to o.rating, the label on the card, NOT ratingFor(o). A measured
 // rating describes what a rung turned out to be worth; the label defines
@@ -394,7 +605,7 @@ var ANAND_SCREEN = { topK: 4, depth: 10, margin: 90, floor: 0.02,
 // measurement back in here would move the rung every time we measured it.
 function screenFor(o) {
   if (!o) return null;
-  if (o.offLadder) return ANAND_SCREEN;
+  if (o.offLadder) return bossScreen(o);
   for (var i = 0; i < SCREENS.length; i++) {
     if (o.rating <= SCREENS[i].upTo) {
       var s = SCREENS[i].spec;
@@ -505,7 +716,7 @@ function screenMove(fen, moves, sampled, spec) {
 // Resolves to a uci string, always.
 function decideMove(fen, moves, o) {
   if (o && o.engineFirst) {
-    return anandPick(fen, moves).then(function (uci) {
+    return anandPick(fen, moves, o).then(function (uci) {
       if (uci) return uci;
       // the engine could not answer — his net alone, screened as before
       return screenMove(fen, moves, chooseBotMove(fen, moves, o), screenFor(o));

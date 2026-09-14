@@ -76,6 +76,51 @@ to his net alone, screened as before — nothing may stop him moving.
 that way: the app and the calibrator drifted apart once already, when a rename
 left both calling a function that no longer existed.
 
+### The Old School Master
+
+The second member off the ladder, below Anand and never locked. He plays the
+way the club wishes it played: every line opened, every piece thrown at the
+king, and a sacrifice whenever the defence would take real accuracy.
+Stockfish has no style knob and cannot be made to want a sacrifice, so this
+is the same machinery as Anand with the dials set the other way, plus a test
+Anand does not need.
+
+**Proposal.** The engine proposes eight lines on a budget of 4000 nodes and
+everything within 150cp of the best survives. The pick among the survivors
+is the ladder's aggression tilt at 1.6 (past the rungs' full scale, because
+at 1.0 the net's own ranking still out-voted a sacrifice it rated 4%) plus a
+bonus per pawn of material the move puts on offer (`materialOffered`, since
+the aggression score alone rewards *taking*, and his first measured game was
+a queen grabbing b7 and getting mated for it), over his net's ranking at T=1,
+*sampled* rather than taken so the same opening does not give the same game.
+
+**Verification.** A sacrifice must have a plan, and 4000 nodes cannot see
+one. But "sound" means sound against the opponent he faces, not against a
+3000-rated engine: a sacrifice a grandmaster refutes and a 2000 does not is
+the old school's stock in trade, and what makes it so is that the defence
+needs accuracy. So each pick goes through `verifyPick`, in two stages. The
+engine looks at the opponent's four best replies on 20000 nodes and counts
+how many leave him more than 100cp behind its own best from before the move.
+None, and the move is simply sound. Two or more, and the defence is easy: the
+move is dropped and he picks again. Exactly one, an only-move defence, and
+Stockfish plays the reply at `UCI_Elo` equal to his rating three times (the
+Elo limiter does apply to `bestmove`, which is what this reads); the move
+stands if his equal misses the refutation more often than not. If nothing of
+his survives he plays the engine's move.
+
+The 150cp margin is how wide his imagination runs; the 100cp verify margin is
+how much an accurate defence may take back; the node budget sets where the
+rating lands. Measured 2026-09-14, 16 games per anchor against
+1320/1600/1900/2200: 2000 before verification (16, 10.5, 13, 6.5) and 2176
+with it (16, 15, 13.5, 9.5), which is what the card now shows. In four games
+against The Sniper he offered material on 4% of his moves (2.5 pawns on
+average) and gave check on 17%. The style is the point of him: if he ever
+needs tuning, move the node budget and leave the margins and the tilt alone.
+
+`BOSSES` in `bot.js` lists the off-ladder members in display order; the app
+addresses them by negative index (-1 Anand, -2 the Master) so a saved game
+or a past-games row can find its opponent again.
+
 ## Personalities
 
 The ten rungs are club members, not difficulty settings: a name, an
@@ -97,8 +142,8 @@ run a gauntlet, and paste the result into `MEASURED` in `bot.js`. A measured
 rating replaces what is displayed and feeds the Elo maths — never `elo_self`,
 which is the knob we ask Maia to play at.
 
-**Every ladder card is currently an unverified label.** Only Anand has been
-measured (2746 at 8000 nodes, 2026-09-14). `MEASURED` is otherwise empty, and the
+**Every ladder card is currently an unverified label.** Only the two members
+off the ladder have been measured (2026-09-14). `MEASURED` is otherwise empty, and the
 aggression tilt moved each member's strength when it landed, so the roster may
 no longer sit in rating order — The Ringer at 0.55 is far milder than The
 Sacker at 0.95 three rungs below it. That pair is the first thing to check.

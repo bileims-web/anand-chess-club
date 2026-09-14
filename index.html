@@ -645,7 +645,7 @@ function setPieceGlyph(el, type, color) {
 var progress = 0;          // ladder levels beaten (memory only)
 var game = null;           // chess.js instance
 var opp = null;            // current opponent
-var oppIndex = -1;         // ladder index, -1 for Mean Girl
+var oppIndex = -1;         // ladder index; negative = off the ladder (bossAt)
 var pieceEls = {};         // square -> piece element
 var selected = null;
 var aiTimer = null;
@@ -698,7 +698,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-09-14.1';
+var BUILD = '2026-09-14.2';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -905,13 +905,15 @@ function renderLadder() {
   div.className = 'divider';
   div.innerHTML = '<span>Not on the ladder</span>';
   box.appendChild(div);
-  var mg = document.createElement('button');
-  mg.className = 'row mg';
-  mg.innerHTML = avatarHtml(ratingFor(MEAN_GIRL), MEAN_GIRL.avatar, false, MEAN_GIRL.avatarKind) +
-                 '<span class="nm">' + MEAN_GIRL.name + '</span>' +
-                 '<span class="rt">' + ratingFor(MEAN_GIRL) + '</span><span class="st"></span>';
-  mg.onclick = function () { openStartDialog(MEAN_GIRL, -1); };
-  box.appendChild(mg);
+  BOSSES.forEach(function (bo, k) {
+    var mg = document.createElement('button');
+    mg.className = 'row mg';
+    mg.innerHTML = avatarHtml(ratingFor(bo), bo.avatar, false, bo.avatarKind, bo.name) +
+                   '<span class="nm">' + bo.name + '</span>' +
+                   '<span class="rt">' + ratingFor(bo) + '</span><span class="st"></span>';
+    mg.onclick = function () { openStartDialog(bo, -1 - k); };
+    box.appendChild(mg);
+  });
 }
 
 // ---------- Board setup ----------
@@ -1146,7 +1148,7 @@ function aiMove() {
 }
 
 // Status-line updates while a model loads mid-game.
-function netLabel() { return opp && opp.offLadder ? 'Anand' : 'Maia'; }
+function netLabel() { return opp && opp.offLadder ? opp.name : 'Maia'; }
 function netSize() { return opp && opp.offLadder ? '2MB' : '46MB'; }
 function netLoadStatus(status) {
   if (status === 'downloading') setStatus('Downloading ' + netLabel() + ' (' + netSize() + ')…');
@@ -2287,7 +2289,7 @@ function renderHistory() {
       : 0;
     b.innerHTML =
       avatarHtml(rec.oppRating || 1000, rec.avatar, true,
-                 rec.oppIndex === -1 ? 'disguise' : rec.oppIndex, rec.opp) +
+                 rec.oppIndex < 0 ? (bossAt(rec.oppIndex) || MEAN_GIRL).avatarKind : rec.oppIndex, rec.opp) +
       '<span class="hnm">' + escapeHtml(rec.opp) +
       '<span class="hsub">' + (rec.color === 'w' ? 'White' : 'Black') + ' · ' +
       moves + ' moves · ' + fmtWhen(rec.ts) +
@@ -3007,7 +3009,7 @@ function clearSavedGame() {
 function loadGame() {
   return idbGet(GAME_KEY).then(function (rec) {
     if (rec && rec.sans && rec.sans.length &&
-        (rec.oppIndex === -1 || LEVELS[rec.oppIndex])) {
+        (bossAt(rec.oppIndex) || LEVELS[rec.oppIndex])) {
       pendingGame = rec;
     }
   }).catch(function () {});
@@ -3015,7 +3017,7 @@ function loadGame() {
 
 function resumeGame() {
   if (!pendingGame) return;
-  var o = pendingGame.oppIndex >= 0 ? LEVELS[pendingGame.oppIndex] : MEAN_GIRL;
+  var o = pendingGame.oppIndex >= 0 ? LEVELS[pendingGame.oppIndex] : bossAt(pendingGame.oppIndex);
   if (o) startGame(o, pendingGame.oppIndex, pendingGame);
 }
 
@@ -3072,7 +3074,7 @@ function endGame(reason) {
       ? opp.name + ' (' + ratingFor(opp) + ') resigned — the win is yours.'
       : 'You beat ' + opp.name + ' (' + ratingFor(opp) + ')!';
     if (opp.offLadder) {
-      msg += ' Anand’s not on the ladder — bragging rights only.';
+      msg += ' ' + opp.name + '’s not on the ladder — bragging rights only.';
     } else if (oppIndex === progress) {
       progress++;
       saveState();

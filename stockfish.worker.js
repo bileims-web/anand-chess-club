@@ -180,6 +180,10 @@ self.onmessage = function (e) {
     if (current) { reply({ id: m.id, ok: false, error: 'analysis already running' }); return; }
     current = { id: m.id, pvs: [], t0: Date.now(), aborted: false };
     send('setoption name MultiPV value ' + (m.multipv || 1));
+    // setoption persists across searches, and one caller (the Master's
+    // refuter) deliberately weakens bestmove. Reset before every search so
+    // nobody inherits it; a caller that wants it passes it in options.
+    send('setoption name UCI_LimitStrength value false');
     if (m.options) {
       Object.keys(m.options).forEach(function (name) {
         send('setoption name ' + name + ' value ' + m.options[name]);

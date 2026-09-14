@@ -108,8 +108,9 @@ it is actually worth.</p>
 // Stockfish's own strength limiter bottoms out here; below it, a bot can only
 // be bounded from above rather than measured.
 var ANCHORS = [1320, 1600, 1900, 2200];
-// Anand's card says 2700, so the ladder's anchors would all be swept. His
-// gauntlet runs against the top of Stockfish's UCI_Elo range instead (3190 max).
+// Anand's card says 2700, so the ladder's anchors would all be swept. A card
+// of 2500 or more runs against the top of Stockfish's UCI_Elo range instead
+// (3190 max); the Old School Master at 2000 uses the ladder's.
 var ANAND_ANCHORS = [2200, 2500, 2800, 3100];
 var SF_FLOOR = 1320;
 
@@ -228,7 +229,7 @@ function runOne(bot, cfg) {
   }).then(function () {
     var rows = [];
     var chain = Promise.resolve();
-    var anchors = bot.offLadder ? ANAND_ANCHORS : ANCHORS;
+    var anchors = bot.rating >= 2500 ? ANAND_ANCHORS : ANCHORS;
     log('  anchors ' + anchors.join(', '));
     anchors.forEach(function (anchor) {
       chain = chain.then(function () {
@@ -294,7 +295,7 @@ function render() {
 }
 
 // ---------- wiring ----------
-var ALL = LEVELS.concat([MEAN_GIRL]);
+var ALL = LEVELS.concat(BOSSES);
 (function () {
   var sel = $('who');
   var all = document.createElement('option');
