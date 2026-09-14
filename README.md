@@ -49,14 +49,28 @@ Anand is the exception to all three steps, because for him the order is
 reversed. His net is 1.7MB and searches nothing, so asked for a move on its own
 it plays club chess with a 2700 on the card, and no amount of screening fixes
 that — a veto removes blunders, it does not find plans. So **Stockfish
-proposes and his net picks**: the engine returns six moves at `UCI_Elo 2700`,
-everything within 40cp of its best goes to his net, and he plays the one *he*
-ranks highest. The engine sets the standard, the net keeps the style.
+proposes and his net picks**: the engine searches six lines on a fixed budget
+of `ANAND_NODES` (8000), everything within 40cp of its best goes to his net,
+and he plays the one *he* ranks highest. The engine sets the standard, the net
+keeps the style.
 
-Read the card carefully. His *candidates* are 2700; the pick among them is his
-own, so his real strength sits a little under the number. That is what the
-40cp margin costs, and why it is tight. If the engine cannot answer he falls
-back to his net alone, screened as before — nothing may stop him moving.
+The budget is nodes, not `UCI_Elo`, and that is not a style choice. Stockfish's
+Elo limit weakens only the single `bestmove` it prints at the end; the
+`info ... pv` lines are the honest full-strength ranking, and those are what
+the proposal reads. He shipped for four days asking for depth 12 at
+`UCI_Elo 2700` and got a full-strength depth-12 list — the pv lines were
+byte-identical at `UCI_Elo 1320` and `2700`, only `bestmove` moved — which is
+engine chess with a 2700 on the card. A node cap weakens every line the same
+way. The calibrator's anchor is unaffected: it plays `bestmove`, where the
+Elo limit does apply.
+
+Read the card carefully. The pick among the candidates is his own, so his real
+strength sits a little under whatever the budget is worth; that is what the
+40cp margin costs, and why it is tight. What the budget is worth is for
+`calibrate.html` to say, and it has: on 2026-09-14, 16 games per anchor
+against 2200/2500/2800/3100, 40000 nodes measured 2894, 20000 also 2894, and
+8000 measured 2746, so 8000 it is. If the engine cannot answer he falls back
+to his net alone, screened as before — nothing may stop him moving.
 
 `decideMove` in `bot.js` is the only way either page chooses a move. Keep it
 that way: the app and the calibrator drifted apart once already, when a rename
@@ -83,7 +97,8 @@ run a gauntlet, and paste the result into `MEASURED` in `bot.js`. A measured
 rating replaces what is displayed and feeds the Elo maths — never `elo_self`,
 which is the knob we ask Maia to play at.
 
-**Every card is currently an unverified label.** `MEASURED` is empty, and the
+**Every ladder card is currently an unverified label.** Only Anand has been
+measured (2746 at 8000 nodes, 2026-09-14). `MEASURED` is otherwise empty, and the
 aggression tilt moved each member's strength when it landed, so the roster may
 no longer sit in rating order — The Ringer at 0.55 is far milder than The
 Sacker at 0.95 three rungs below it. That pair is the first thing to check.
@@ -95,10 +110,11 @@ the app. The defaults are 10 games against each of four Stockfish anchors
 (1320/1600/1900/2200), which is 40 games per bot and 440 for the whole roster —
 start with one or two members rather than "Everyone".
 
-**Skip Anand.** Since the engine now proposes his moves at `UCI_Elo 2700` and
-the anchors stop at 2200, he sweeps every anchor, the fit reports `—`, and the
-run is wasted time. His candidates are anchored by construction; that is the
-whole point of the change.
+**Anand has his own anchors.** The ladder's stop at 2200 and he would sweep
+them, so his gauntlet runs against `ANAND_ANCHORS` (2200/2500/2800/3100 —
+Stockfish's `UCI_Elo` tops out at 3190). If he lands far from his card, move
+`ANAND_NODES` in `bot.js` rather than the card: every doubling of the budget
+is worth on the order of a class at these depths.
 
 The Results panel emits a paste-ready `var MEASURED = {…}` block. Paste it over
 the one in `bot.js`.

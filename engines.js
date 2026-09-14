@@ -73,7 +73,8 @@ var SF = (function () {
     return initPromise;
   }
 
-  // analyse(fen, {depth, multipv, timeout}) -> {bestmove, ponder, pvs, timeMs}
+  // analyse(fen, {depth | nodes | movetime, multipv, timeout, options})
+  //   -> {bestmove, ponder, pvs, timeMs}
   // pvs: [{multipv, move, cp, mate, line, depth}], scores from the side to move.
   // Calls are serialised: the engine searches one position at a time.
   function analyse(fen, opts) {
@@ -85,6 +86,7 @@ var SF = (function () {
           fen: fen,
           depth: opts.depth || 12,
           multipv: opts.multipv || 1,
+          nodes: opts.nodes || 0,
           movetime: opts.movetime || 0,
           options: opts.options || null
         }, opts.timeout || 120000);

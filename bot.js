@@ -172,6 +172,7 @@ var MAIA_TOP_P = 0.92;        // nucleus: drop the bottom 8% of policy mass
 // the bot weaker still, one loop at a time.
 var MEASURED = {
   // 'The Champion': 1642,
+  'Anand': 2746,   // 2026-09-14, ANAND_NODES 8000, 16 games/anchor vs 2200-3100
 };
 
 function ratingFor(o) { return (o && o.measured) || (o && o.rating) || 0; }
@@ -292,17 +293,29 @@ function chooseBotMove(fen, moves, o) {
 // plays club chess with a 2700 on the card. Screening it harder cannot close
 // that gap: a veto removes blunders, it does not find plans.
 //
-// So for him alone the arrangement is inverted. Stockfish — held at the same
-// UCI_Elo the calibrator anchors the ladder against — proposes the moves, and
-// everything within a margin of its best goes to his net, which plays the one
-// HE ranks highest. The engine sets the standard, the net keeps the style.
+// So for him alone the arrangement is inverted. Stockfish, on a fixed node
+// budget, proposes the moves, and everything within a margin of its best goes
+// to his net, which plays the one HE ranks highest. The engine sets the
+// standard, the net keeps the style.
 //
-// Be careful what this claims. The CANDIDATES are 2700; the pick among them is
-// his own, so his real strength sits a little under the number on the card.
-// The margin is what that costs, which is why it is tight.
-var ANAND_ELO = 2700;
+// The budget is nodes, NOT UCI_Elo, and that is not a style choice. Stockfish's
+// Elo limit weakens only the single `bestmove` it prints at the end of a
+// search; the `info ... pv` lines it prints on the way are the honest,
+// full-strength ranking, and those are what this reads. Asked for depth 12 at
+// UCI_Elo 2700 he was getting a full-strength depth-12 list — the pv lines
+// were byte-identical at UCI_Elo 1320 and 2700, only bestmove moved (found
+// 2026-09-14) — and played engine chess with a 2700 on the card. A node cap
+// weakens every line the same way, which is what a candidate list needs.
+//
+// Be careful what this claims. The pick among the candidates is his own, so
+// his real strength sits a little under whatever the budget is worth. The
+// margin is what that costs, which is why it is tight. What the budget IS
+// worth is for calibrate.html to say. Measured 2026-09-14 (headless gauntlet,
+// 16 games per anchor, anchors 2200-3100 at 50ms): 40000 nodes = 2894, 20000
+// = 2894, 8000 = 2746 — so 8000, which reaches about depth 5-6 with six lines
+// open. Halving from 40000 barely moved him; the last cut did.
+var ANAND_NODES = 8000;   // MultiPV-6 search budget; calibrate, don't guess
 var ANAND_MULTIPV = 6;
-var ANAND_DEPTH = 12;
 var ANAND_MARGIN = 40;    // cp behind the engine's best, still his to choose
 
 // Resolves to a uci string, or null if the engine could not answer — the
@@ -313,16 +326,26 @@ function anandPick(fen, moves) {
 
   return SF.init().then(function () {
     return SF.analyse(fen, {
-      depth: ANAND_DEPTH, multipv: ANAND_MULTIPV, timeout: 15000,
-      options: { 'UCI_LimitStrength': 'true', 'UCI_Elo': String(ANAND_ELO) }
+      nodes: ANAND_NODES, multipv: ANAND_MULTIPV, timeout: 15000,
+      // Explicit: the calibrator's anchor sets it true on this same engine and
+      // setoption persists, so a proposal must never inherit a weakened pick.
+      options: { 'UCI_LimitStrength': 'false' }
     });
   }).then(function (res) {
-    var pvs = (res && res.pvs) || [];
-    var cand = [];
+    // A node cap stops the search mid-iteration, so the six slots can hold
+    // lines from different depths, and a move can sit in two of them (its old
+    // slot from the last full iteration and its new one). Keep the deepest
+    // report of each move.
+    var pvs = ((res && res.pvs) || []).slice().sort(function (a, b) {
+      return (b.depth || 0) - (a.depth || 0);
+    });
+    var cand = [], seen = {};
     for (var j = 0; j < pvs.length; j++) {
+      if (!pvs[j] || !pvs[j].move || seen[pvs[j].move]) continue;
+      seen[pvs[j].move] = true;
       // cp is from the side to move, which on his own move is his side —
       // no negation here, unlike the veto, which scores AFTER a move.
-      if (pvs[j] && pvs[j].move) cand.push({ uci: pvs[j].move, cp: pvToCp(pvs[j]) });
+      cand.push({ uci: pvs[j].move, cp: pvToCp(pvs[j]) });
     }
     if (!cand.length) return null;
     var best = cand.reduce(function (a, b) { return b.cp > a.cp ? b : a; });

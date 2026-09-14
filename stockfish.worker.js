@@ -4,11 +4,13 @@
  *
  * Protocol (page -> worker):
  *   { cmd: 'init',    id }
- *   { cmd: 'analyse', id, fen, depth, multipv, movetime, options }
+ *   { cmd: 'analyse', id, fen, depth, nodes, multipv, movetime, options }
  *       options: { 'UCI_LimitStrength': true, 'UCI_Elo': 1600, ... } — applied
- *       as setoption before the search. movetime (ms) replaces the depth limit;
- *       strength limiting is calibrated against real search, not a depth cap,
- *       so calibrate.html uses movetime and leaves depth alone.
+ *       as setoption before the search. movetime (ms) replaces the depth limit,
+ *       else nodes does; strength limiting is calibrated against real search,
+ *       not a depth cap, so calibrate.html uses movetime and leaves depth alone.
+ *       NB UCI_Elo weakens only `bestmove`; the pvs stay full strength. A
+ *       caller that reads pvs and wants them weaker must cap nodes instead.
  *   { cmd: 'abort',   id }   // page-side timeout fired; stop the current search
  *
  * Protocol (worker -> page), always tagged with the request id:
@@ -184,7 +186,9 @@ self.onmessage = function (e) {
       });
     }
     send('position fen ' + m.fen);
-    send(m.movetime ? 'go movetime ' + m.movetime : 'go depth ' + (m.depth || 12));
+    send(m.movetime ? 'go movetime ' + m.movetime
+       : m.nodes ? 'go nodes ' + m.nodes
+       : 'go depth ' + (m.depth || 12));
     return;
   }
 
