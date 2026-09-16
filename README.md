@@ -12,14 +12,19 @@ served copy and reloads itself once when it finds it is running a stale build.
 | --- | --- |
 | `index.html` | The app: board, ladder, coach, review. All UI and state. |
 | `bot.js` | How an opponent picks a move — sampling knobs, the screens, the roster with its ratings, styles and lines. Shared with the calibrator. |
-| `engines.js` | The three engine workers: Stockfish plus the two ONNX policy nets. |
+| `engines.js` | The four engine workers: Stockfish, Patricia, plus the two ONNX policy nets. |
 | `calibrate.html` | Measures what a bot is actually worth, by playing it against Stockfish at known `UCI_Elo`. Not linked from the app. |
-| `*.worker.js` | Worker entry points (Stockfish, Maia, Anand). |
+| `*.worker.js` | Worker entry points (Stockfish, Patricia, Maia, Anand). |
+| `engine/` | The engine builds: Stockfish 18 lite (GPL, `Copying.txt`) and Patricia 5.1 (MIT, `PATRICIA_LICENSE`), both WebAssembly. |
+| `patricia/` | How `engine/patricia.*` was built: a patch over Patricia's source, the wasm entry point, and `build.sh`. |
+| `headless/` | The same pages under node: the gauntlet that measures a member, a sparring harness that shows how one plays, and a check over the Old Man's book. |
 
 ## How the opponents play
 
-Every opponent is a policy net asked for one move — no search. The ladder is
-Maia 3 conditioned on the level's rating; Anand is a separate net. A move is
+Every opponent on the ladder is a policy net asked for one move — no search.
+The ladder is Maia 3 conditioned on the level's rating; Anand is a separate
+net. (Three members off the ladder are a second engine instead; see the
+Patricia three below.) A move is
 chosen in three steps, all of them in `bot.js`:
 
 1. **The tail is cut.** Sampling a policy at T=1 plays its 1.5%-probability
@@ -117,9 +122,132 @@ against The Sniper he offered material on 4% of his moves (2.5 pawns on
 average) and gave check on 17%. The style is the point of him: if he ever
 needs tuning, move the node budget and leave the margins and the tilt alone.
 
+### The Old Man
+
+The third member off the ladder, and the weakest player in the club on
+purpose. He is the Master's machinery with the dials pushed past where the
+Master stops, the verification thrown out, and one thing neither of the others
+has: an opening book. Card 1500, measured 1560.
+
+Weak is the point. A sacrifice you cannot refute is a lecture; the piece he
+throws at your king is usually one you may keep, if you find the moves.
+
+**Two margins.** The engine proposes ten lines on **2400 nodes**, and
+anything within **150cp** of its best is his, exactly as for the Master. But a move that offers material **at the king** survives out to
+**550cp**. That second margin is the whole character: the engine will never
+propose Bxh7+ inside a normal margin, because it can count and it has just
+counted a bishop, so a member who is meant to play it anyway needs the
+candidate kept alive past the point where the engine wrote it off. It is still
+a bound — beyond 550 the move is losing by an amount even he can see.
+`kingwardFactor` defines "at the king": Chebyshev distance from the square the
+piece lands on to the enemy king, a check counting as having landed on him,
+and the material offered is discounted by it. A pawn's worth adjacent
+qualifies; a rook dropped on a1 does not.
+
+**No verification.** The Master's two-stage test asks whether a sacrifice is
+sound against an equal, and every answer it gives makes him stronger and
+tamer — it was worth 176 Elo when it landed. The Old Man is the other end of
+that trade. Nothing he plays is checked, so a good half of it should not work,
+and finding out which half is the game.
+
+**The book.** `SAC_BOOK_LINES` is 73 lines of SAN — the King's Gambit and the
+Muzio, the Danish, the Evans, the Fried Liver, the Traxler, the Morra, the
+Milner-Barry, and on the black side the Latvian, the Schliemann, the Budapest,
+the Benko, From's Gambit and the Albin, down to the Lasker Trap's
+under-promotion and one line for the day somebody plays 1.f3 and 2.g4.
+Compiled on first use into a map from **position** to move, so transpositions
+are free: 1.e4 d5 2.exd5 Nf6 3.d4 Qxd5 4.Nc3 Qa5 finds the move written for
+1.e4 d5 2.exd5 Qxd5 3.Nc3 Qa5 4.d4 Nf6 without either line knowing about the
+other. Many lines are marked `side: 'wb'` on purpose — he plays the Muzio and
+he accepts the Muzio; a gambit declined is an insult from either chair. Where
+several lines leave the same position he samples by weight, and the weights
+are combined as a **maximum, never a sum**, or three King's Gambit lines
+written out in detail would out-vote the Danish at move two. The book is his
+only exemption from the engine: while a line lasts he plays it whatever
+Stockfish thinks, which is the point, because Stockfish does not approve of
+the Latvian either.
+
+**Tuning him is not tuning the Master.** The Master's note says to move the
+node budget and leave the margins alone. That does not transfer, and the
+measurements say why: 1200 nodes measured 1395, 2400 measured 1439 — a
+doubling bought 44 Elo where it should have bought a class — while narrowing
+the ordinary margin from 250 to 150 was worth 121 (1439 to 1560, and the only
+run where all four anchors gave an estimate rather than a sweep). A player who
+deliberately plays a move 250cp below best is not limited by how far the engine
+saw. So **`margin` is his strength knob and `kingMargin` is his style**, and
+widening the first is not a shortcut to the second: at 250 he threw material on
+15% of his moves instead of 11%, but in smaller pieces, and gave check on 10%
+instead of 17%. Ordinary error is not style.
+
+**What he actually did.** Four games against Stockfish 1500 from move one
+(`headless/spar.js`, which is what that tool is for): material offered on 11%
+of his moves, 6% of them sacrifices aimed at the king worth 3.2 pawns each,
+check on 17%, 28ms a move. The Master, for comparison, offers on 4% at 2.5
+pawns. He also does not resign and does not accept a draw (`neverResigns`,
+`neverDraws`): a man who has just given up a rook for an attack has no
+business offering you the game two moves later, and the swindle is the last
+thing to go.
+
+### The Patricia three: the Chess Prodigy, the Grand Old Man, Mr.X
+
+Three more members off the ladder, and none of them is a net with a screen.
+They are a second engine. [Patricia](https://github.com/Adam-Kulju/Patricia)
+(Adam Kulju, MIT) is an engine built to attack: its evaluation is trained to
+prefer the sacrifice and the open king, and at full strength it is a 3500 that
+plays like nobody since Tal. It also carries its own way of being weaker,
+which is the whole reason it is here. `Skill_Level` 1-20 maps to an Elo table
+(4 = 1200, 10 = 1800, 17 = 2500; 21 is full strength), and below 21 the
+engine runs a five-line search, then spends an accumulating centipawn budget
+on deliberately worse moves — reaching for a sacrifice whenever one is within
+reach of the budget (`src/human.h` in Patricia's source). So for these three
+the weakened `bestmove` is exactly the move we want, which is the opposite of
+the Stockfish trap Anand fell into: Patricia's limiter weakens the move it
+plays, not a list somebody else reads. `patriciaMove` in `bot.js` asks for it
+and plays it. No net, no candidate list, no margins, no book: the personality
+is the engine and the dial is the level.
+
+| Member | Card | `Skill_Level` | Nodes |
+| --- | --- | --- | --- |
+| Chess Prodigy | 1200 | 4 | 8000 |
+| Grand Old Man | 1800 | 10 | 20000 |
+| Mr.X | 2500 | 17 | 60000 |
+
+**Nodes, not time**, for the reason every other budget in the club is nodes
+or depth: a member has to be worth the same on a phone as on the calibrator.
+The build is single-threaded and scalar (no SIMD), about 140k nodes a second
+on the server, so Mr.X's 60000 is under half a second there and a second or
+two on a phone. Patricia's author calibrated the levels at real time
+controls, so with a node cap under them the cards are labels until the
+gauntlet says otherwise; if one lands far off, move `nodes` first, then the
+level.
+
+**The mistake budget accrues across a game** and resets on `ucinewgame`,
+which matters for how the page talks to the engine. `bot.js` only ever has a
+fen, so `patricia.worker.js` infers a new game — the move number went
+backwards, or there are more pieces on the board than last time — and sends
+`ucinewgame` itself. There was a second trap of the same shape: the human
+mode keys its budget on the game ply, and a bare `position fen` leaves the
+ply at the start-position value, so the level never engaged at all. The wasm
+build reads the ply off the fen (see `patricia/patch.py`).
+
+**How it was built.** Patricia has no browser build, and it is not quite a
+stock compile: its nets go in through `incbin`'s inline assembly, which wasm
+does not support, so the patch routes them through the compiler's `#embed`
+instead; the search runs on a `std::thread`, so the patch calls it directly;
+and the stdin loop becomes `uci_line()`, one line per call, so JavaScript can
+feed it. `patricia/build.sh` clones the pinned commit, applies `patch.py`,
+adds `patricia_wasm.cpp` (the two exports, `pat_init` and `pat_cmd`) and
+compiles with Emscripten; the worker fetches the `.wasm` itself and hands
+the bytes over, so the same file loads on GitHub Pages and under
+`headless/browser.js`. A search runs to its node limit inside `pat_cmd` and
+blocks the worker until it returns, which is why every request carries a
+node budget and nothing carries a time.
+
 `BOSSES` in `bot.js` lists the off-ladder members in display order; the app
-addresses them by negative index (-1 Anand, -2 the Master) so a saved game
-or a past-games row can find its opponent again.
+addresses them by negative index (-1 Anand, -2 the Master, -3 the Old Man,
+-4 the Chess Prodigy, -5 the Grand Old Man, -6 Mr.X) so a saved game or a
+past-games row can find its opponent again. Append only: those indices are
+written into saved games.
 
 ## Personalities
 
@@ -142,11 +270,12 @@ run a gauntlet, and paste the result into `MEASURED` in `bot.js`. A measured
 rating replaces what is displayed and feeds the Elo maths — never `elo_self`,
 which is the knob we ask Maia to play at.
 
-**Every ladder card is currently an unverified label.** Only the two members
-off the ladder have been measured (2026-09-14). `MEASURED` is otherwise empty, and the
-aggression tilt moved each member's strength when it landed, so the roster may
-no longer sit in rating order — The Ringer at 0.55 is far milder than The
-Sacker at 0.95 three rungs below it. That pair is the first thing to check.
+**Every ladder card is currently an unverified label.** Only the three members
+off the ladder have been measured (2026-09-14, and the Old Man 2026-09-15).
+`MEASURED` is otherwise empty, and the aggression tilt moved each member's
+strength when it landed, so the roster may no longer sit in rating order — The
+Ringer at 0.55 is far milder than The Sacker at 0.95 three rungs below it. That
+pair is the first thing to check.
 
 ### Running the gauntlet
 
@@ -157,7 +286,9 @@ start with one or two members rather than "Everyone".
 
 **Anand has his own anchors.** The ladder's stop at 2200 and he would sweep
 them, so his gauntlet runs against `ANAND_ANCHORS` (2200/2500/2800/3100 —
-Stockfish's `UCI_Elo` tops out at 3190). If he lands far from his card, move
+Stockfish's `UCI_Elo` tops out at 3190). The cut is by card rating, 2500 and
+up, so Mr.X runs against them too; the Master at 2000, the Old Man at 1500,
+the Prodigy at 1200 and the Grand Old Man at 1800 use the ladder's. If he lands far from his card, move
 `ANAND_NODES` in `bot.js` rather than the card: every doubling of the budget
 is worth on the order of a class at these depths.
 
@@ -171,10 +302,31 @@ trading services, and a full gauntlet is hours of Stockfish search plus a
 forward pass of a 46MB net on every ply. Use a laptop's browser, which is what
 the page is for.
 
-A headless version is possible if this ever needs to be re-run often — the
-Stockfish build loads under node with a Web Worker shim, and `onnxruntime-node`
-can serve the nets — but it should be scheduled outside market hours, through
-`scripts/research.sh` in the trading repo.
+That is still true of the browser page. What exists instead is `headless/`,
+which loads `bot.js`, `engines.js` and the calibrator's own inline script
+verbatim into node — the Stockfish build takes a Web Worker shim and
+`onnxruntime-node` serves the nets — so the gauntlet can be run on the server
+after all, under the trading repo's memory cap and never in market hours:
+
+```
+RESEARCH_MEM=800M bash ~/trading/scripts/research.sh \
+  node headless/gauntlet.js "Old Man" --games 16 --movetime 50
+```
+
+16 games against each of four anchors is about three minutes for a cheap
+member and ten for an expensive one. Two more tools sit beside it, because
+the gauntlet answers one question only — how strong:
+
+* `headless/spar.js` plays real games **from move one** and annotates every
+  move with what it gave away, which is the only way to see a style or an
+  opening book at all. The gauntlet starts each game from a few random plies,
+  so a book barely appears in it: what it measures is the machinery, and a
+  member who opens with a gambit is worth a little less than his card.
+* `headless/bookcheck.js` replays every line of the Old Man's book and fails
+  on the first illegal move. The book is SAN typed by hand, and a wrong token
+  silently truncates its line and every position after it — one did, on the
+  first run: `Nxf7` where the f-pawn had already captured on e4 and the square
+  was empty.
 
 ## Relocking the ladder
 

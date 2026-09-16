@@ -6,8 +6,9 @@
  * the DOM, the board, or persisted state stays in the page; only the decision
  * lives here.
  *
- * Expects two globals: Chess (chess.js) and SF (the Stockfish wrapper — any
- * object exposing init() and analyse(fen, opts)).
+ * Expects three globals: Chess (chess.js), SF (the Stockfish wrapper — any
+ * object exposing init() and analyse(fen, opts)) and PAT (the Patricia
+ * wrapper: init() and play(fen, opts)).
  */
 'use strict';
 
@@ -182,10 +183,147 @@ var OLD_SCHOOL = { name: 'Old School Master', rating: 2000, offLadder: true,
     won:     ['Beauty before correctness. Mostly beauty.'],
     lost:    ['Unsound. Gloriously unsound. Again.'] } };
 
+// The Old Man is what the Master would be if he had never learned to check
+// his own work. Same machinery again, a third set of dials, and three things
+// of his own.
+//
+// He is WEAK ON PURPOSE. The card says 1500 because a sacrifice you cannot
+// refute is a lecture, not a game: the whole point of him is that the piece
+// he throws at your king is usually one you may keep, if you find the moves.
+// Measured 1560 (2026-09-15) — and what makes him that is NOT the node budget.
+// Doubling it from 1200 to 2400 was worth 44 Elo, where the Master's rule of
+// thumb says a doubling is worth a class; a member who deliberately plays a
+// move the engine rates 250cp below best is not limited by how far the engine
+// saw. The MARGIN is his strength knob: 250 to 150 moved him 121 points. So
+// his ordinary moves are held to the Master's own 150cp, and everything he
+// gets wrong, he gets wrong on purpose, below.
+//
+// 1. TWO margins. Anything within `margin` of the engine's best is his to
+//    choose, as for the Master. But a move that offers material AT THE KING
+//    survives out to `kingMargin`, nearly four times as far — the engine may
+//    disapprove all it likes of Bxh7+, and he plays it anyway. That second
+//    margin IS the madness, and it is bounded: beyond it even he can see it.
+//    Widening the FIRST margin looks like more of the same and is not: at 250
+//    he threw material 15% of the time instead of 11%, but in smaller pieces,
+//    checked half as often (10% against 17%) and lost 121 Elo. Ordinary error
+//    is not style. Leave `margin` alone and move `kingMargin` if he ever needs
+//    to be madder.
+// 2. The sacrifice bonus is KINGWARD (sacKingward). materialOffered alone
+//    rewards giving a piece away anywhere on the board, which is not romance,
+//    it is a blunder with a story attached; multiplied by kingwardFactor it
+//    rewards giving it away on the king's doorstep and nowhere else.
+// 3. A BOOK. He opens the way he plays: gambits, both colours, the engine
+//    never consulted while a line of it lasts (see SAC_BOOK_LINES).
+//
+// No verification. The Master's two-stage test asks whether a sacrifice is
+// sound against an equal, and every answer it gives makes him stronger and
+// tamer — 2000 to 2176 when it landed. The Old Man is the other end of that
+// trade: nothing of his is checked, so about half of what he plays should not
+// work, and finding out which half is the game. Never locked, never on the
+// ladder, and he does not resign or take a draw — at his age the swindle is
+// the last thing to go.
+var OLD_MAN = { name: 'Old Man', rating: 1500, offLadder: true,
+  avatarKind: 'initials', aggression: 1.6, sacrifice: 1.6, sacKingward: true,
+  temp: 1.0, engineFirst: true, book: true, neverResigns: true, neverDraws: true,
+  proposal: { nodes: 2400, margin: 150, kingMargin: 550, multipv: 10 },
+  lines: {
+    hello:   ['Sit, child. Sixty years of bad ideas, and I remember every one.',
+              'I stopped counting material in 1971. Never missed it.',
+              'Castle if you like. I am coming to that side anyway.'],
+    capture: ['Take it. Take the other one as well.',
+              'It was standing in front of my attack.',
+              'Pieces are for giving. The endgame is for accountants.'],
+    check:   ['Out of the house, little king. Walk.',
+              'Check. There is more of this.',
+              'Your king has seen the board. Now he sees the middle of it.'],
+    gloat:   ['I have nothing left but the attack. It has always been enough.',
+              'Count my pieces. Now count your king\u2019s squares.',
+              'Morphy did this to a Duke. At the opera. Between arias.'],
+    rattled: ['You gave it back? Nobody gives it back.',
+              'Defended. How very modern of you.',
+              'My hands shake. My sacrifices do not.'],
+    won:     ['Mate. Now let us set it up again and look at the pretty part.',
+              'Unsound, probably. Beautiful, certainly.'],
+    lost:    ['Bah. One piece too many. Set them up.',
+              'I would play it again tomorrow. And the day after that.'] } };
+
+// ---------- The Patricia three ----------
+// Three members who are not a net and a screen at all, but a second engine.
+// Patricia (github.com/Adam-Kulju/Patricia, MIT) is built to attack — its
+// evaluation is trained to prefer the sacrifice, and at full strength it is
+// a 3500 that plays like Tal — and it carries its own way of being weaker:
+// `Skill_Level` 1-20 maps to an Elo table (4 = 1200, 10 = 1800, 17 = 2500,
+// 21 = full strength). Below 21 it runs a five-line search and then spends an
+// accumulating centipawn budget on deliberately worse moves, reaching for a
+// sacrifice whenever one is within reach. So for these three the weakened
+// `bestmove` is exactly the move we want, and `patriciaMove` plays it as it
+// comes. No net, no candidate list, no margins, no book: the whole
+// personality is in the engine, and the dial is the level.
+//
+// The budget is NODES, not time, for the same reason the ladder's screens are
+// depth and Anand's proposal is nodes: a member has to be worth the same on a
+// phone as on the calibrator. The levels were calibrated by Patricia's author
+// at real time controls, so with a node cap under them the card is a label
+// until the gauntlet says otherwise — move `nodes` first if one lands far
+// off, then the level.
+//
+// The mistake budget accrues across a game and resets on a new one; the
+// worker infers a new game from the fen (see patricia.worker.js).
+var CHESS_PRODIGY = { name: 'Chess Prodigy', rating: 1200, offLadder: true,
+  avatarKind: 'initials', aggression: 0, engineFirst: false,
+  patricia: { skill: 4, nodes: 8000 },
+  lines: {
+    hello:   ["I'm nine. I've beaten my dad, my coach, and my coach's dad.",
+              'Mum says I have to be done by bedtime. That is plenty.',
+              'Do you know the Fried Liver? You will.'],
+    capture: ['Free piece! Coach says never say no.',
+              'Mine. Was that yours? Mine now.'],
+    check:   ['Check! I love saying it.',
+              'Check. Again. This never gets old.'],
+    gloat:   ['I saw this in a puzzle book. Page forty.',
+              "You're doing the face grown-ups do."],
+    rattled: ["That's not what the book said you'd play.",
+              'Wait. Wait. Let me think. Don\u2019t look.'],
+    won:     ['Told you. Nine years old.'],
+    lost:    ['I let you win. Also: rematch. Now.'] } };
+
+var GRAND_OLD_MAN = { name: 'Grand Old Man', rating: 1800, offLadder: true,
+  avatarKind: 'initials', aggression: 0, engineFirst: false,
+  patricia: { skill: 10, nodes: 20000 },
+  lines: {
+    hello:   ['I have played this game since before your grandfather was born, and I have never once defended.',
+              'Sit. The pieces go forward. Everything else is commentary.',
+              'They call me the Grand Old Man. The grand part is the chess.'],
+    capture: ['Taken. It was offered, and I am not a man to refuse a gift.',
+              'One less thing between me and your king.'],
+    check:   ['Check. Your king and I are about to become well acquainted.',
+              'Check. Do not run. It is undignified, and it will not help.'],
+    gloat:   ['This is how the game was played when it was still a game.',
+              'Anderssen would have found it faster. Anderssen was a better man.'],
+    rattled: ['Hm. That is the modern way, I suppose.',
+              'You defend well. Nobody defended in my day. It was considered rude.'],
+    won:     ['The attack was always sound. It merely took a hundred years to prove.'],
+    lost:    ['Unsound, then. I shall play it again tomorrow, correctly.'] } };
+
+var MR_X = { name: 'Mr.X', rating: 2500, offLadder: true,
+  avatarKind: 'initials', aggression: 0, engineFirst: false,
+  patricia: { skill: 17, nodes: 60000 },
+  lines: {
+    hello:   ['No name. No rating. No mercy.',
+              'You will not find my games anywhere. You will remember this one.'],
+    capture: ['Taken.', 'You did not need that.'],
+    check:   ['Check.', 'Check. Keep walking.'],
+    gloat:   ['Some in the club say I am a grandmaster in disguise. Some say worse.',
+              'This position has one exit. I am standing in it.'],
+    rattled: ['Interesting. Nobody told you to play that.', '\u2026Noted.'],
+    won:     ['Nobody saw that coming. Nobody ever does.'],
+    lost:    ['This game never happened. Understood?'] } };
+
 // Off the ladder, in display order. The app addresses them by negative index
-// (-1 is Anand, -2 the Master) so a saved game or a past-games row can find
-// its opponent again.
-var BOSSES = [MEAN_GIRL, OLD_SCHOOL];
+// (-1 is Anand, -2 the Master, -3 the Old Man, -4 the Prodigy, -5 the Grand
+// Old Man, -6 Mr.X) so a saved game or a past-games row can find its opponent
+// again. Append only: those indices are stored.
+var BOSSES = [MEAN_GIRL, OLD_SCHOOL, OLD_MAN, CHESS_PRODIGY, GRAND_OLD_MAN, MR_X];
 function bossAt(idx) { return idx < 0 ? BOSSES[-idx - 1] || null : null; }
 
 // How sharply a member follows its net: the ladder is human-shaped, Anand is
@@ -236,6 +374,7 @@ var MEASURED = {
   // 'The Champion': 1642,
   'Anand': 2746,   // 2026-09-14, ANAND_NODES 8000, 16 games/anchor vs 2200-3100
   'Old School Master': 2176,   // 2026-09-14, 4000 nodes / 150cp / verified, 16 games/anchor vs 1320-2200
+  'Old Man': 1560,   // 2026-09-15, 2400 nodes / 150cp + 550cp kingward, 16 games/anchor vs 1320-2200
 };
 
 function ratingFor(o) { return (o && o.measured) || (o && o.rating) || 0; }
@@ -330,6 +469,37 @@ function materialOffered(g, mv) {
   g2.move(cheapest);
   var recapture = g2.moves({ verbose: true }).some(function (r) { return r.to === mv.to && r.captured; });
   return Math.max(0, moverVal - (recapture ? PIECE_VAL[cheapest.piece] : 0) - took);
+}
+
+// How much of a sacrifice is aimed at the king. materialOffered says what a
+// move gives away; this says whether it gives it away anywhere that matters.
+// A bishop thrown at h7 and a bishop left hanging on b5 cost the same and are
+// not the same move: the first is the old school, the second is a blunder with
+// a story attached. Chebyshev distance from the square the piece lands on to
+// the enemy king, and a check counts as having landed on him.
+//
+// Only members with `sacKingward` are scored this way. The Master is not: he
+// has a verification stage to throw out the pointless ones, and this would be
+// a second opinion on the same question.
+function kingwardFactor(g, mv, mover) {
+  if (g.in_check()) return 1;
+  var ek = kingXY(g, mover === 'w' ? 'b' : 'w');
+  if (!ek) return 0;
+  var to = sqXY(mv.to);
+  var d = Math.max(Math.abs(to.x - ek.x), Math.abs(to.y - ek.y));
+  return d <= 1 ? 1 : d === 2 ? 0.7 : d === 3 ? 0.3 : 0;
+}
+
+// What a member's taste makes of one move: the aggression score, plus the
+// material it puts on offer if giving material is part of who they are.
+function tasteScore(g, mv, mover, o) {
+  var s = aggressionScore(g, mv, mover);
+  if (o && o.sacrifice) {
+    var off = materialOffered(g, mv);
+    if (off && o.sacKingward) off *= kingwardFactor(g, mv, mover);
+    s += o.sacrifice * off;
+  }
+  return s;
 }
 
 // The move an opponent samples: policy, tail cut, then their own taste.
@@ -444,6 +614,27 @@ function anandPick(fen, moves, o) {
     if (!cand.length) return null;
     var best = cand.reduce(function (a, b) { return b.cp > a.cp ? b : a; });
     var ok = cand.filter(function (c) { return c.cp >= best.cp - spec.margin; });
+    // A second, wider margin for one kind of move only: the piece thrown at
+    // the king. The engine will not propose Bxh7+ inside a normal margin —
+    // it can count, and it has just counted a bishop — so a member who is
+    // meant to play it anyway needs the candidate kept alive past the point
+    // where the engine has written it off. `kingMargin` is how far past, and
+    // it is still a bound: beyond it the move is losing by an amount even he
+    // can see. Members without one (Anand, the Master) never reach this.
+    if (spec.kingMargin > spec.margin) {
+      var m0 = new Chess(fen).turn();
+      for (var w = 0; w < cand.length; w++) {
+        var c = cand[w];
+        if (c.cp >= best.cp - spec.margin) continue;       // already his
+        if (c.cp < best.cp - spec.kingMargin) continue;    // past even his imagination
+        var gw = new Chess(fen), mw = applyUci(gw, c.uci);
+        if (!mw) continue;
+        // At least a pawn's worth of material, discounted by how far from the
+        // king it lands: a rook dropped on a1 does not qualify, a pawn on g6
+        // next to the king does.
+        if (materialOffered(gw, mw) * kingwardFactor(gw, mw, m0) >= 1) ok.push(c);
+      }
+    }
     if (!ok.length) return null;
     if (ok.length === 1 || !taste.aggression) {
       return ok.reduce(function (a, b) {
@@ -461,8 +652,7 @@ function anandPick(fen, moves, o) {
                         promotion: u.length > 4 ? u.slice(4) : undefined });
       if (!mv) continue;
       if (g.in_checkmate()) return u;           // nobody in this club declines mate
-      var ag = aggressionScore(g, mv, mover);
-      if (o && o.sacrifice) ag += o.sacrifice * materialOffered(g, mv);
+      var ag = tasteScore(g, mv, mover, o);
       scored.push({ uci: u, p: pOf[u] || 0, ag: ag }); sum += ag;
     }
     if (!scored.length) return ok[0].uci;
@@ -709,12 +899,264 @@ function screenMove(fen, moves, sampled, spec) {
 }
 
 
+// ---------- Patricia: the engine is the member ----------
+// Resolves to a uci string, or null if Patricia could not answer — the caller
+// then falls back to the net and the boss screen, so nothing can stop a
+// member moving. The move is checked for legality here because it is going
+// straight onto the board: a second engine is a second parser.
+function patriciaMove(fen, o) {
+  var spec = (o && o.patricia) || {};
+  return PAT.init().then(function () {
+    return PAT.play(fen, { skill: spec.skill, nodes: spec.nodes, timeout: 30000 });
+  }).then(function (res) {
+    var u = res && res.bestmove;
+    if (!u || u === '(none)' || u === '0000') return null;
+    try { return applyUci(new Chess(fen), u) ? u : null; } catch (e) { return null; }
+  }, function () { return null; });
+}
+
+
+// ---------- The Old Man's book ----------
+// Every other member of the club starts thinking on move one, and it shows:
+// a net asked for an opening plays whatever club players play, and an engine
+// on a small budget plays whatever is safe. Neither of them will ever, on its
+// own, play 2.f4. So the one member whose whole character is the gambit gets
+// told the gambits.
+//
+// Written as lines of SAN, the way they are written in a book, and compiled
+// on first use into a map from position to move (compileBook). Keying on the
+// POSITION rather than the move order means transpositions come free: 1.Nf3
+// d5 2.d4 and 1.d4 d5 2.Nf3 are the same key, and the book answers both.
+//
+// `side` says which half of the line is his. Many of these are 'wb' on
+// purpose — he plays the Muzio, and he also ACCEPTS the Muzio; a gambit
+// declined is an insult on both sides of the board. Where the defence is
+// merely correct rather than fun, the line is 'w' or 'b' alone.
+//
+// `weight` is how often he reaches for it when several lines leave the same
+// position, sampled, so the same opening does not give the same game. Weights
+// are combined as a MAXIMUM, never a sum: three separate King's Gambit lines
+// must not out-vote the Danish at move two just because they were written out
+// in more detail.
+//
+// The book is his ONLY exemption from the engine. While a line lasts he plays
+// it whatever Stockfish thinks, which is the point — the engine does not
+// approve of the Latvian either.
+var SAC_BOOK_LINES = [
+  // --- White: 1.e4, and a pawn at the first opportunity ---
+  { name: 'Muzio Gambit',            side: 'wb', weight: 3,
+    line: 'e4 e5 f4 exf4 Nf3 g5 Bc4 g4 O-O gxf3 Qxf3 Qf6 e5 Qxe5 Bxf7+ Kxf7 d4 Qxd4+ Be3 Qf6 Bxf4' },
+  { name: 'Allgaier Gambit',         side: 'w',  weight: 1,
+    line: 'e4 e5 f4 exf4 Nf3 g5 h4 g4 Ng5 h6 Nxf7 Kxf7 d4' },
+  { name: 'Kieseritzky, accepted',   side: 'b',  weight: 3,
+    line: 'e4 e5 f4 exf4 Nf3 g5 h4 g4 Ne5 Nf6 Bc4 d5 exd5 Bd6' },
+  { name: "King's Gambit, modern defence", side: 'w', weight: 1,
+    line: 'e4 e5 f4 exf4 Nf3 d5 exd5 Nf6 Bb5+ c6 dxc6 Nxc6 d4' },
+  { name: "King's Gambit declined",  side: 'w',  weight: 1,
+    line: 'e4 e5 f4 Bc5 Nf3 d6 Nc3 Nf6 Bc4 Nc6 d3' },
+  { name: 'Falkbeer Counter-Gambit', side: 'w',  weight: 1,
+    line: 'e4 e5 f4 d5 exd5 e4 d3 Nf6 dxe4 Nxe4 Nf3 Bc5 Qe2' },
+  { name: 'Danish Gambit',           side: 'wb', weight: 2,
+    line: 'e4 e5 d4 exd4 c3 dxc3 Bc4 cxb2 Bxb2' },
+  { name: 'Goring Gambit',           side: 'wb', weight: 2,
+    line: 'e4 e5 Nf3 Nc6 d4 exd4 c3 dxc3 Bc4 cxb2 Bxb2' },
+  { name: 'Scotch Gambit',           side: 'wb', weight: 1,
+    line: 'e4 e5 Nf3 Nc6 d4 exd4 Bc4 Bc5 c3 dxc3 Nxc3' },
+  { name: 'Evans Gambit',            side: 'wb', weight: 3,
+    line: 'e4 e5 Nf3 Nc6 Bc4 Bc5 b4 Bxb4 c3 Ba5 d4 exd4 O-O d6 cxd4 Bb6 Nc3' },
+  { name: 'Evans Gambit, 5...Bc5',   side: 'w',  weight: 1,
+    line: 'e4 e5 Nf3 Nc6 Bc4 Bc5 b4 Bxb4 c3 Bc5 d4 exd4 O-O' },
+  { name: 'Evans Gambit declined',   side: 'w',  weight: 1,
+    line: 'e4 e5 Nf3 Nc6 Bc4 Bc5 b4 Bb6 b5 Na5 Nxe5' },
+  { name: 'Fried Liver Attack',      side: 'w',  weight: 3,
+    line: 'e4 e5 Nf3 Nc6 Bc4 Nf6 Ng5 d5 exd5 Nxd5 Nxf7 Kxf7 Qf3+ Ke6 Nc3' },
+  { name: 'Two Knights, 5...Na5',    side: 'w',  weight: 3,
+    line: 'e4 e5 Nf3 Nc6 Bc4 Nf6 Ng5 d5 exd5 Na5 Bb5+ c6 dxc6 bxc6 Qf3' },
+  { name: 'Traxler Counter-Attack',  side: 'wb', weight: 3,
+    line: 'e4 e5 Nf3 Nc6 Bc4 Nf6 Ng5 Bc5 Nxf7 Bxf2+ Kxf2 Nxe4+ Kg1 Qh4 g3 Nxg3 hxg3 Qxg3+ Kf1 Rf8' },
+  { name: 'Schliemann Defence',      side: 'b',  weight: 3,
+    line: 'e4 e5 Nf3 Nc6 Bb5 f5 Nc3 fxe4 Nxe4 d5 Nxe5 dxe4 Nxc6 Qg5' },
+  { name: 'Schliemann, 4.d3',        side: 'b',  weight: 2,
+    line: 'e4 e5 Nf3 Nc6 Bb5 f5 d3 fxe4 dxe4 Nf6' },
+  { name: 'Schliemann, 4.Bxc6',      side: 'b',  weight: 2,
+    line: 'e4 e5 Nf3 Nc6 Bb5 f5 Bxc6 dxc6 Nxe5 Qd4' },
+  { name: 'Rubinstein Counter-Gambit', side: 'b', weight: 2,
+    line: 'e4 e5 Nf3 Nc6 Nc3 Nf6 Bb5 Nd4 Nxe5 Qe7 Nf3 Nxb5 Nxb5 Qxe4+' },
+  { name: 'Wayward Queen, punished', side: 'b',  weight: 2,
+    line: 'e4 e5 Qh5 Nc6 Bc4 g6 Qf3 Nf6' },
+  { name: 'Traxler, 5.Bxf7+',        side: 'b',  weight: 2,
+    line: 'e4 e5 Nf3 Nc6 Bc4 Nf6 Ng5 Bc5 Bxf7+ Ke7 Bb3 Rf8 O-O d6' },
+  { name: "King's Gambit, 2...Nc6",  side: 'w',  weight: 1,
+    line: 'e4 e5 f4 Nc6 Nf3 exf4 d4 g5 h4' },
+  { name: "King's Gambit, 2...d6",   side: 'w',  weight: 1,
+    line: 'e4 e5 f4 d6 Nf3 exf4 d4 g5 h4' },
+  { name: "King's Gambit, 2...Nf6",  side: 'w',  weight: 1,
+    line: 'e4 e5 f4 Nf6 fxe5 Nxe4 Nf3 d5 d3' },
+  { name: 'Smith-Morra Gambit',      side: 'w',  weight: 3,
+    line: 'e4 c5 d4 cxd4 c3 dxc3 Nxc3 Nc6 Nf3 d6 Bc4 e6 O-O Nf6 Qe2 Be7 Rd1' },
+  { name: 'Morra, 3...Nf6',          side: 'w',  weight: 1,
+    line: 'e4 c5 d4 cxd4 c3 Nf6 e5 Nd5 cxd4 d6 Nf3' },
+  { name: 'Morra declined, 3...d3',  side: 'w',  weight: 1,
+    line: 'e4 c5 d4 cxd4 c3 d3 Bxd3 Nc6 Nf3 d6 O-O' },
+  { name: 'Morra declined, 3...d5',  side: 'w',  weight: 1,
+    line: 'e4 c5 d4 cxd4 c3 d5 exd5 Qxd5 cxd4 Nc6 Nf3' },
+  { name: 'Milner-Barry Gambit',     side: 'w',  weight: 3,
+    line: 'e4 e6 d4 d5 e5 c5 c3 Nc6 Nf3 Qb6 Bd3 cxd4 cxd4 Bd7 O-O Nxd4 Nxd4 Qxd4 Nc3' },
+  { name: 'French Advance, 3...Nc6', side: 'w',  weight: 2,
+    line: 'e4 e6 d4 d5 e5 Nc6 Nf3 Nge7 c3 Nf5 Bd3' },
+  { name: 'French Advance, 3...b6',  side: 'w',  weight: 2,
+    line: 'e4 e6 d4 d5 e5 b6 c3 Qd7 Nf3 Ba6 Bxa6 Nxa6' },
+  { name: 'Caro-Kann, Fantasy',      side: 'w',  weight: 3,
+    line: 'e4 c6 d4 d5 f3 dxe4 fxe4 e5 Nf3 exd4 Bc4 Bb4+ c3 dxc3 O-O' },
+  { name: 'Pirc, Austrian Attack',   side: 'w',  weight: 2,
+    line: 'e4 d6 d4 Nf6 Nc3 g6 f4 Bg7 Nf3 O-O Bd3 Nc6 e5' },
+  { name: 'Modern, Austrian Attack', side: 'w',  weight: 2,
+    line: 'e4 g6 d4 Bg7 Nc3 d6 f4 Nf6 Nf3 O-O Bd3' },
+  { name: 'Alekhine, Four Pawns',    side: 'w',  weight: 2,
+    line: 'e4 Nf6 e5 Nd5 d4 d6 c4 Nb6 f4 dxe5 fxe5 Nc6 Be3 Bf5 Nc3' },
+  { name: 'Scandinavian, 7.g4',      side: 'w',  weight: 2,
+    line: 'e4 d5 exd5 Qxd5 Nc3 Qa5 d4 Nf6 Nf3 Bg4 h3 Bh5 g4 Bg6 Ne5' },
+  { name: 'Scandinavian, transposed', side: 'w', weight: 2,
+    line: 'e4 d5 exd5 Nf6 d4 Qxd5 Nc3' },
+  { name: 'Scandinavian, 2...Nf6',   side: 'w',  weight: 1,
+    line: 'e4 d5 exd5 Nf6 d4 Nxd5 c4 Nb6 Nc3 g6 Be3' },
+  { name: 'Nimzowitsch Defence',     side: 'w',  weight: 1,
+    line: 'e4 Nc6 d4 d5 Nc3 dxe4 d5' },
+
+  // --- Black: 1...e5 against everything, and a counter-gambit if allowed ---
+  { name: 'Latvian Gambit',          side: 'b',  weight: 3,
+    line: 'e4 e5 Nf3 f5 Nxe5 Qf6 d4 d6 Nc4 fxe4 Nc3 Qg6' },
+  { name: 'Latvian, 3.Bc4',          side: 'b',  weight: 2,
+    line: 'e4 e5 Nf3 f5 Bc4 fxe4 Nxe5 Qg5 Nf7 Qxg2 Rf1 d5 Nxh8 Nf6' },
+  { name: 'Latvian, 3.exf5',         side: 'b',  weight: 2,
+    line: 'e4 e5 Nf3 f5 exf5 e4 Ne5 Nf6' },
+  { name: 'Elephant Gambit',         side: 'b',  weight: 1,
+    line: 'e4 e5 Nf3 d5 exd5 e4 Qe2 Nf6' },
+  { name: 'Scotch, 4...Qh4',         side: 'b',  weight: 2,
+    line: 'e4 e5 Nf3 Nc6 d4 exd4 Nxd4 Qh4' },
+  { name: 'Vienna Gambit, accepted', side: 'b',  weight: 2,
+    line: 'e4 e5 Nc3 Nf6 f4 d5 fxe5 Nxe4 Nf3 Bg4' },
+  { name: "Bishop's Opening, 3...Nxe4", side: 'b', weight: 2,
+    line: 'e4 e5 Bc4 Nf6 Nf3 Nxe4' },
+  { name: 'Centre Game',             side: 'b',  weight: 2,
+    line: 'e4 e5 d4 exd4 Qxd4 Nc6 Qe3 Nf6 Nc3 Bb4' },
+  { name: 'Budapest Gambit',         side: 'b',  weight: 3,
+    line: 'd4 Nf6 c4 e5 dxe5 Ng4 Bf4 Nc6 Nf3 Bb4+ Nbd2 Qe7 a3 Ngxe5' },
+  { name: 'Budapest, 4.Nf3',         side: 'b',  weight: 2,
+    line: 'd4 Nf6 c4 e5 dxe5 Ng4 Nf3 Bc5 e3 Nc6 Be2 Ngxe5' },
+  { name: 'Fajarowicz Gambit',       side: 'b',  weight: 1,
+    line: 'd4 Nf6 c4 e5 dxe5 Ne4' },
+  { name: 'Benko Gambit',            side: 'b',  weight: 2,
+    line: 'd4 Nf6 c4 c5 d5 b5 cxb5 a6 bxa6 Bxa6 Nc3 d6 e4 Bxf1 Kxf1 g6' },
+  { name: 'Blumenfeld Gambit',       side: 'b',  weight: 1,
+    line: 'd4 Nf6 c4 e6 Nf3 c5 d5 b5' },
+  { name: 'Albin Counter-Gambit',    side: 'b',  weight: 2,
+    line: 'd4 d5 c4 e5 dxe5 d4 Nf3 Nc6 g3 Be6 Bg2 Qd7' },
+  { name: 'Lasker Trap',             side: 'b',  weight: 2,
+    line: 'd4 d5 c4 e5 dxe5 d4 e3 Bb4+ Bd2 dxe3 Bxb4 exf2+ Ke2 fxg1=N+' },
+  { name: 'Benko without c4',        side: 'b',  weight: 1,
+    line: 'd4 Nf6 Nf3 c5 d5 b5' },
+  { name: 'Trompowsky, 2...Ne4',     side: 'b',  weight: 1,
+    line: 'd4 Nf6 Bg5 Ne4 Bf4 c5' },
+  { name: 'Bellon Gambit',           side: 'b',  weight: 2,
+    line: 'c4 e5 Nc3 Nf6 Nf3 e4 Ng5 b5' },
+  { name: 'English, 1...e5',         side: 'b',  weight: 1,
+    line: 'c4 e5 Nc3 Nf6 g3 Bb4' },
+  { name: "From's Gambit",           side: 'b',  weight: 3,
+    line: 'f4 e5 fxe5 d6 exd6 Bxd6 Nf3 g5 d4 g4 Ne5 Bxe5 dxe5 Qxd1+ Kxd1 Nc6' },
+  { name: "From's Gambit, 5.g3",     side: 'b',  weight: 2,
+    line: 'f4 e5 fxe5 d6 exd6 Bxd6 Nf3 g5 g3 g4 Nh4 Ne7' },
+  { name: 'Sokolsky, 1...e5',        side: 'b',  weight: 2,
+    line: 'b4 e5 Bb2 Bxb4' },
+  { name: 'Reti, 2...d4',            side: 'b',  weight: 1,
+    line: 'Nf3 d5 c4 d4 e3 Nc6 exd4 Nxd4' },
+  { name: 'Anything else, 1...e5',   side: 'b',  weight: 1, line: 'b3 e5' },
+  { name: 'Anything else, 1...e5',   side: 'b',  weight: 1, line: 'g3 e5' },
+  { name: 'Anything else, 1...e5',   side: 'b',  weight: 1, line: 'e3 e5' },
+  { name: 'Anything else, 1...e5',   side: 'b',  weight: 1, line: 'd3 e5' },
+  { name: 'Anything else, 1...e5',   side: 'b',  weight: 1, line: 'c3 e5' },
+  { name: 'Anything else, 1...e5',   side: 'b',  weight: 1, line: 'Nc3 e5' },
+  { name: 'Anything else, 1...e5',   side: 'b',  weight: 1, line: 'a3 e5' },
+  { name: 'Anything else, 1...e5',   side: 'b',  weight: 1, line: 'h3 e5' },
+  { name: 'Grob, 1...e5',            side: 'b',  weight: 1, line: 'g4 e5' },
+  { name: 'Desprez, 1...e5',         side: 'b',  weight: 1, line: 'h4 e5' },
+  // He has waited his whole life for someone to play 1.f3 and 2.g4.
+  { name: "Fool's Mate",             side: 'b',  weight: 3, line: 'f3 e5 g4 Qh4#' }
+];
+
+var SAC_BOOK = null;   // compiled on first use: position -> [{ uci, w, name }]
+
+// Castling rights and the en-passant square are part of the position; the
+// clocks are not. Two games that reach this board by different routes get the
+// same book move.
+function bookKey(fen) { return fen.split(' ').slice(0, 4).join(' '); }
+
+// Walk each line, recording the moves that belong to him. An illegal token is
+// a typo in the book: say so and drop the rest of that line, because every
+// position after it is fiction. Nothing here may throw — a broken book must
+// cost him his opening, not his move.
+function compileBook(lines) {
+  var map = {};
+  for (var i = 0; i < lines.length; i++) {
+    var e = lines[i], sans = e.line.split(/\s+/), g;
+    try { g = new Chess(); } catch (err) { return map; }
+    for (var p = 0; p < sans.length; p++) {
+      var mine = e.side.indexOf(g.turn()) >= 0;
+      var key = mine ? bookKey(g.fen()) : null;
+      var mv = null;
+      try { mv = g.move(sans[p]); } catch (err2) { mv = null; }
+      if (!mv) {
+        if (typeof console !== 'undefined' && console.warn) {
+          console.warn('book: illegal move ' + sans[p] + ' at ply ' + (p + 1) + ' of ' + e.name);
+        }
+        break;
+      }
+      if (!mine) continue;
+      var uci = mv.from + mv.to + (mv.promotion || '');
+      var slot = map[key] || (map[key] = []);
+      var found = null;
+      for (var k = 0; k < slot.length; k++) if (slot[k].uci === uci) { found = slot[k]; break; }
+      if (found) { if (e.weight > found.w) found.w = e.weight; }
+      else slot.push({ uci: uci, w: e.weight, name: e.name });
+    }
+  }
+  return map;
+}
+
+// His move if this position is still in his book, else null. Sampled by
+// weight, and every candidate is played on a copy first: the book is data,
+// and data can be wrong, but an opponent that cannot move is unforgivable.
+function bookMove(fen, o) {
+  if (!o || !o.book) return null;
+  if (!SAC_BOOK) SAC_BOOK = compileBook(SAC_BOOK_LINES);
+  var slot = SAC_BOOK[bookKey(fen)];
+  if (!slot || !slot.length) return null;
+  var ok = slot.filter(function (s) {
+    try { return !!applyUci(new Chess(fen), s.uci); } catch (e) { return false; }
+  });
+  if (!ok.length) return null;
+  return sampleWeighted(
+    ok.map(function (s) { return [s.uci, s.w]; }),
+    ok.map(function (s) { return s.w; }));
+}
+
+
 // ---------- One way in ----------
 // The app and the calibrator must choose moves through the same door, or the
 // strength we measure stops being the strength that ships. They drifted once
 // already: a rename left both pages calling a function that no longer existed.
 // Resolves to a uci string, always.
 function decideMove(fen, moves, o) {
+  // A member with a book plays it while it lasts, engine and net both silent.
+  var booked = bookMove(fen, o);
+  if (booked) return Promise.resolve(booked);
+  if (o && o.patricia) {
+    return patriciaMove(fen, o).then(function (uci) {
+      if (uci) return uci;
+      // Patricia could not answer — his net alone, screened as a boss is
+      return screenMove(fen, moves, chooseBotMove(fen, moves, o), screenFor(o));
+    });
+  }
   if (o && o.engineFirst) {
     return anandPick(fen, moves, o).then(function (uci) {
       if (uci) return uci;

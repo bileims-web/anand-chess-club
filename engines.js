@@ -1,8 +1,9 @@
 /*
- * engines.js — the three engine workers, and nothing else.
+ * engines.js — the four engine workers, and nothing else.
  *
  * Stockfish (search, used for the coach, the review, Anand's blunder filter
- * and calibration) plus the two ONNX policy nets. Shared by index.html and
+ * and calibration), Patricia (the engine three members simply are) plus the
+ * two ONNX policy nets. Shared by index.html and
  * calibrate.html so both drive an identical stack.
  *
  * Expects a global BUILD (cache-busting build id) at call time.
@@ -97,6 +98,93 @@ var SF = (function () {
   }
 
   return { init: init, analyse: analyse, info: info };
+})();
+
+// ---------- Patricia ----------
+// A second engine, for the members who ARE an engine: Patricia's own skill
+// levels play sacrificial chess at a chosen strength, so the page asks it for
+// a move and plays it. Runs in patricia.worker.js; same shape as SF above,
+// one request at a time, every request on a timeout.
+var PAT = (function () {
+  var worker = null, nextId = 1, pending = {}, initPromise = null, queue = Promise.resolve();
+  var info = { engine: null };
+
+  function ensureWorker() {
+    if (worker) return;
+    worker = new Worker('patricia.worker.js?v=' + BUILD);
+    worker.onmessage = function (e) {
+      var m = e.data || {};
+      var p = pending[m.id];
+      if (!p) return;
+      delete pending[m.id];
+      clearTimeout(p.timer);
+      if (m.ok) p.resolve(m); else p.reject(new Error(m.error || 'engine error'));
+    };
+    worker.onerror = function (e) {
+      var err = new Error(e.message || 'patricia worker crashed');
+      Object.keys(pending).forEach(function (id) {
+        clearTimeout(pending[id].timer);
+        pending[id].reject(err);
+        delete pending[id];
+      });
+      try { worker.terminate(); } catch (ignore) {}
+      worker = null;
+      initPromise = null;
+    };
+  }
+
+  function call(msg, timeoutMs) {
+    ensureWorker();
+    return new Promise(function (resolve, reject) {
+      var id = nextId++;
+      msg.id = id;
+      pending[id] = {
+        resolve: resolve,
+        reject: reject,
+        timer: setTimeout(function () {
+          delete pending[id];
+          if (worker) worker.postMessage({ cmd: 'abort', id: id });
+          reject(new Error(msg.cmd + ' timed out'));
+        }, timeoutMs)
+      };
+      worker.postMessage(msg);
+    });
+  }
+
+  // Resolves once the engine is loaded and has answered the UCI handshake.
+  function init() {
+    if (!initPromise) {
+      initPromise = call({ cmd: 'init' }, 60000).then(function (m) {
+        info.engine = m.engine;
+        return info;
+      }, function (err) {
+        initPromise = null;
+        throw err;
+      });
+    }
+    return initPromise;
+  }
+
+  // play(fen, {skill, nodes, timeout}) -> {bestmove, timeMs}
+  // skill is Patricia's Skill_Level (1-21), nodes the search budget.
+  // Calls are serialised: the engine searches one position at a time.
+  function play(fen, opts) {
+    opts = opts || {};
+    var job = queue.then(function () {
+      return init().then(function () {
+        return call({
+          cmd: 'play',
+          fen: fen,
+          skill: opts.skill || 21,
+          nodes: opts.nodes || 10000
+        }, opts.timeout || 30000);
+      });
+    });
+    queue = job.then(function () {}, function () {});
+    return job;
+  }
+
+  return { init: init, play: play, info: info };
 })();
 
 // ---------- Neural-net engines ----------

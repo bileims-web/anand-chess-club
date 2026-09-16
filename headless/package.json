@@ -1,0 +1,16 @@
+{
+  "name": "headless",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "chess.js": "^0.10.3",
+    "onnxruntime-node": "^1.29.0"
+  }
+}

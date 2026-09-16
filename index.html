@@ -698,7 +698,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-09-14.2';
+var BUILD = '2026-09-16.1';
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
@@ -2836,8 +2836,9 @@ function playerOfferDraw() {
   if (over || !game || aiTimer || coachBusy) return;
   if (game.turn() !== playerColor) return;
   var plies = game.history().length;
-  // He takes a draw when he is not better; he plays on when he is.
-  var accepts = plies >= OFFER_MIN_PLIES && oppWinPct < 45;
+  // He takes a draw when he is not better; he plays on when he is. A member
+  // marked neverDraws plays on regardless — see the Old Man.
+  var accepts = plies >= OFFER_MIN_PLIES && oppWinPct < 45 && !opp.neverDraws;
   setStatus('You offered a draw…');
   setTimeout(function () {
     if (over) return;
@@ -2852,6 +2853,10 @@ function playerOfferDraw() {
 // Called after each of his moves, with his own read of his chances.
 function maybeOfferResignation() {
   if (over || resignOffered) return;
+  // Some members do not resign. A player who has just given up a rook for an
+  // attack has no business offering you the game two moves later, and the
+  // swindle is the last thing an old man gives up.
+  if (opp && opp.neverResigns) return;
   oppLostStreak = oppWinPct <= RESIGN_AT ? oppLostStreak + 1 : 0;
   if (oppLostStreak < RESIGN_STREAK) return;
   if (game.history().length < OFFER_MIN_PLIES) return;
@@ -2907,6 +2912,8 @@ function startGame(o, idx, resume) {
   // first reply. Start it loading with the board rather than making you wait on
   // 7MB of wasm mid-move. The bottom rungs have no screen and skip it.
   if (screenFor(o)) SF.init().catch(function () {});
+  // The Patricia members are their engine: 5MB of wasm, wanted by move one.
+  if (o.patricia) PAT.init().catch(function () {});
   if (resume) {
     // replay the saved moves; anything illegal means a stale record
     for (var ri = 0; ri < resume.sans.length; ri++) {
