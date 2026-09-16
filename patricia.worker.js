@@ -64,6 +64,10 @@ function doInit() {
     }).then(function (buf) {
       return Patricia({
         wasmBinary: new Uint8Array(buf),
+        // Belt and braces: if a build ever ignores wasmBinary (this one did,
+        // until INCOMING_MODULE_JS_API named it), at least look in the right
+        // directory rather than next to this worker.
+        locateFile: function (f) { return ENGINE_DIR + f; },
         print: function (l) { lines.push('' + l); },
         printErr: function (l) { lines.push('' + l); }
       });

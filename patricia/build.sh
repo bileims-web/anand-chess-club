@@ -37,6 +37,7 @@ em++ -O2 -std=c++20 -ffast-math -DPATRICIA_NO_THREADS \
   -sEXPORTED_FUNCTIONS=_pat_init,_pat_cmd,_malloc,_free \
   -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,stringToUTF8,lengthBytesUTF8 \
   -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=96MB -sSTACK_SIZE=4MB \
+  -sINCOMING_MODULE_JS_API=wasmBinary,locateFile,print,printErr,onAbort,onRuntimeInitialized \
   -o "$ROOT/engine/patricia.js"
 cp "$SRC/LICENSE" "$ROOT/engine/PATRICIA_LICENSE"
 ls -la "$ROOT/engine/patricia.js" "$ROOT/engine/patricia.wasm"

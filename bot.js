@@ -912,7 +912,14 @@ function patriciaMove(fen, o) {
     var u = res && res.bestmove;
     if (!u || u === '(none)' || u === '0000') return null;
     try { return applyUci(new Chess(fen), u) ? u : null; } catch (e) { return null; }
-  }, function () { return null; });
+  }, function (err) {
+    // Say so: the fallback plays a perfectly reasonable game, which is how a
+    // dead engine measured 2010 on the gauntlet before anyone noticed.
+    if (typeof console !== 'undefined' && console.warn) {
+      console.warn('patricia: ' + (err && err.message || err) + ' — falling back to the net');
+    }
+    return null;
+  });
 }
 
 
