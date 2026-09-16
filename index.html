@@ -597,9 +597,17 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
-<script src="pieces.js"></script>
-<script src="engines.js"></script>
-<script src="bot.js"></script>
+<script>
+// The build id lives here, ahead of the scripts, because they carry it: Pages
+// caches every file for ten minutes, and the freshness reload below only
+// refetches this page — bot.js kept serving last build's roster until the
+// cache expired (2026-09-16). With ?v= on the tag, a bump refreshes them too,
+// as it always has for the workers.
+var BUILD = '2026-09-16.2';
+document.write('<script src="pieces.js?v=' + BUILD + '"><\/script>' +
+               '<script src="engines.js?v=' + BUILD + '"><\/script>' +
+               '<script src="bot.js?v=' + BUILD + '"><\/script>');
+</script>
 <script>
 'use strict';
 
@@ -698,7 +706,7 @@ var coachedFens = {};      // positions a pip has already been spent on
 var oppWinPct = 50;        // his latest read of his own chances
 var oppLostStreak = 0;     // consecutive moves he considers lost
 
-var BUILD = '2026-09-16.1';
+// BUILD is defined up with the script tags, which carry it.
 var $ = function (id) { return document.getElementById(id); };
 
 // GitHub Pages lets browsers cache this page for 10 minutes, which makes
